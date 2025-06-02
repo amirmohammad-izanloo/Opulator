@@ -106,5 +106,6 @@ public:
 //-----------------------------------------------
 int main() {
 
+    cout << "Hello Izan" << endl;
     return 0;
 }
