@@ -1,0 +1,197 @@
+#include <iostream>
+#include <string>
+#include <vector>
+#include <regex>
+#include <map>  
+using namespace std;
+
+//--------------------- parse commands ---------------------
+vector<string> parseCommands(const string& command) {
+    vector<string> params;
+    vector<regex> patterns = {
+        regex(R"(add\s+R([^<]+)\s+([^<]+)\s+([^<]+)\s+([^<]+))"),
+        regex(R"(delete\s+R([^<]+))"),
+        regex(R"(add\s+C([^<]+)\s+([^<]+)\s+([^<]+)\s+([^<]+))"),
+        regex(R"(delete\s+C([^<]+))"),
+        regex(R"(add\s+L([^<]+)\s+([^<]+)\s+([^<]+)\s+([^<]+))"),
+        regex(R"(delete\s+L([^<]+))"),
+        regex(R"(add\s+D([^<]+)\s+([^<]+)\s+([^<]+)\s+([^<]+))"),
+        regex(R"(delete\s+D([^<]+))"),
+        regex(R"(add\s+GND\s+([^<]+))"),
+        regex(R"(delete\s+GND\s+([^<]+))"),
+        regex(R"(list\s+([^<]+))"),
+        regex(R"(rename\s+node\s+([^<]+)\s+([^<]+))")
+    };
+    smatch match;
+    for (const auto& pat : patterns) {
+        if (regex_match(command, match, pat)) {
+            for (size_t i = 1; i < match.size(); ++i)
+                params.push_back(match[i]);
+            return params;
+        }
+    }
+    return {};
+}
+
+//-------------------- parse number ---------------------------
+double parseNumber(string input) {
+    double result = 0;
+    char last = input[input.length() - 1];
+    string numberPart;
+    if (last == 'k' || last == 'K') {
+        numberPart = input.substr(0, input.length() - 1);
+        result = stod(numberPart) * 1000;
+    } else if (last == 'm' || last == 'M') {
+        numberPart = input.substr(0, input.length() - 1);
+        result = stod(numberPart) / 1000;
+    } else {
+        result = stod(input);
+    }
+    return result;
+}
+
+//------------------- Node Struct ----------------------
+struct Node {
+    string name;
+    vector<string> connections;
+
+    Node(const string& nodeName) : name(nodeName) {}
+
+    void addConnection(const string& otherNode) {
+        connections.push_back(otherNode);
+    }
+};
+
+//------------------- Element Class -------------------
+class Element {
+protected:
+    string name;
+    Node* node1;
+    Node* node2;
+    double value;
+    string unit;
+
+public:
+    Element(const string& elemName, Node* n1, Node* n2, double val, const string& unitType)
+        : name(elemName), node1(n1), node2(n2), value(val), unit(unitType) {}
+
+    virtual ~Element() {}
+
+    string getName() const { return name; }
+    Node* getNode1() const { return node1; }
+    Node* getNode2() const { return node2; }
+    double getValue() const { return value; }
+    string getUnit() const { return unit; }
+
+    virtual void display() const {
+        cout << name << ": " << node1->name << " -- " << node2->name
+             << " (Value: " << value << " " << unit << ")" << endl;
+    }
+};
+
+class Resistor : public Element {
+public:
+    Resistor(const string& elemName, Node* n1, Node* n2, double resistance)
+        : Element(elemName, n1, n2, resistance, "Ohm") {}
+};
+
+class Capacitor : public Element {
+public:
+    Capacitor(const string& elemName, Node* n1, Node* n2, double capacitance)
+        : Element(elemName, n1, n2, capacitance, "Farad") {}
+};
+
+class Inductor : public Element {
+public:
+    Inductor(const string& elemName, Node* n1, Node* n2, double inductance)
+        : Element(elemName, n1, n2, inductance, "Henry") {}
+};
+
+class VoltageSource : public Element {
+public:
+    VoltageSource(const string& elemName, Node* n1, Node* n2, double voltage)
+        : Element(elemName, n1, n2, voltage, "Volt") {}
+};
+
+class CurrentSource : public Element {
+public:
+    CurrentSource(const string& elemName, Node* n1, Node* n2, double current)
+        : Element(elemName, n1, n2, current, "Ampere") {}
+};
+
+//------------------- Circuit Graph -------------------
+class CircuitGraph {
+    map<string, Node*> nodes;
+    vector<Element*> elements;
+
+public:
+    ~CircuitGraph() {
+        // Use normal iterator loops instead of structured bindings
+        for (auto it = nodes.begin(); it != nodes.end(); ++it) {
+            delete it->second;
+        }
+        for (auto* element : elements) {
+            delete element;
+        }
+    }
+
+    void addNode(const string& nodeName) {
+        if (nodes.find(nodeName) == nodes.end()) {
+            nodes[nodeName] = new Node(nodeName);
+        }
+    }
+
+    // Getter function for retrieving nodes safely
+    Node* getNode(const string& nodeName) {
+        if (nodes.find(nodeName) != nodes.end()) {
+            return nodes[nodeName];
+        }
+        return nullptr; // Return null if the node doesn't exist
+    }
+
+    void addElement(Element* element) {
+        elements.push_back(element);
+        // Update node connections.
+        nodes[element->getNode1()->name]->addConnection(element->getNode2()->name);
+        nodes[element->getNode2()->name]->addConnection(element->getNode1()->name);
+    }
+
+    void displayGraph() const {
+        cout << "\nCircuit Graph Representation:\n";
+        // Use an old-style range loop:
+        for (auto it = nodes.begin(); it != nodes.end(); ++it) {
+            cout << it->first << " -> ";
+            for (const auto& conn : it->second->connections) {
+                cout << conn << " ";
+            }
+            cout << endl;
+        }
+        cout << "\nCircuit Elements:\n";
+        for (const auto* elem : elements) {
+            elem->display();
+        }
+    }
+};
+
+//------------------- main() Function -------------------
+int main() {
+    CircuitGraph circuit;
+
+
+    circuit.addNode("N1");
+    circuit.addNode("N2");
+    circuit.addNode("N3");
+
+
+    Node* n1 = circuit.getNode("N1");
+    Node* n2 = circuit.getNode("N2");
+    Node* n3 = circuit.getNode("N3");
+
+
+    circuit.addElement(new Resistor("R1", n1, n2, 1000));
+    circuit.addElement(new Capacitor("C1", n2, n3, 0.01));
+
+    circuit.displayGraph();
+
+    return 0;
+}
