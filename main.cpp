@@ -2,9 +2,51 @@
 #include <string>
 #include <vector>
 #include <regex>
+#include <stdexcept>
 using namespace std;
 
 
+//------------------- Error exception ----------------------
+class NoGroundException : public exception {
+public:
+    const char* what() const noexcept override {
+        return "Error: No ground node detected in the circuit.";
+    }
+};
+
+class InvalidValueException : public exception {
+public:
+    const char* what() const noexcept override {
+        return "Error: Negative or zero value for a component is invalid.";
+    }
+};
+
+class DuplicateNameException : public exception {
+public:
+    const char* what() const noexcept override {
+        return "Error: Duplicate node or component name detected.";
+    }
+};
+
+class DependentSourceException : public exception {
+public:
+    const char* what() const noexcept override {
+        return "Error: Dependent source has an undefined control element.";
+    }
+};
+class MissingParameterException : public exception {
+public:
+    const char* what() const noexcept override {
+        return "Error: Missing parameters for time-dependent source.";
+    }
+};
+
+class SingularMatrixException : public exception {
+public:
+    const char* what() const noexcept override {
+        return "Error: Zero pivot encountered. The system is singular.";
+    }
+};
 //-------------------- parse number ---------------------------
 double parseNumber(string input) {
     double result = 0;
@@ -81,7 +123,8 @@ public:
     Resistor(const string &elemName, Node* node1, Node* node2, double resistance)
         : Element(elemName, node1, node2, resistance, "Ohm")
     {
-        conductance = (resistance != 0) ? (1.0 / resistance) : 0;
+        if (resistance <= 0)
+            throw InvalidValueException();
     }
 
     string getType() const override { return "Resistor"; }
@@ -200,6 +243,10 @@ public:
     }
 
     void renameNode(const string& oldName, const string& newName) {
+        for (auto node : nodes) {
+            if (node->getName() == newName)
+                throw DuplicateNameException();  // Throws an exception with message "Error: Duplicate node or component name detected."
+        }
         Node* target = nullptr;
         for (auto node : nodes) {
             if (node->getName() == oldName)
@@ -209,6 +256,7 @@ public:
                 return;
             }
         }
+
         if (target) {
             // Since node name is private, call setName.
             target->setName(newName);
@@ -229,10 +277,19 @@ public:
     void solveNodalAnalysis(const string &groundName) {
     // Build a list of unknown nodes (all nodes except the ground).
     vector<Node*> unknownNodes;
+        bool foundGround = false;
+        for (auto node : nodes) {  // nodes is your container of Node* in your Circuit class
+            if (node->getName() == groundName) {
+                foundGround = true;
+                break;
+            }
+        }
+        if (!foundGround) throw NoGroundException();
     for (auto node : nodes) {  // nodes is assumed as a container of Node* in your Circuit class
         if (node->getName() != groundName)
             unknownNodes.push_back(node);
     }
+
     int n = unknownNodes.size();
     if(n == 0) {
         cout << "No unknown nodes to solve for (all nodes are ground?)" << endl;
@@ -360,66 +417,125 @@ public:
 
 
 //--------------------- parse commands ---------------------
-void processCommand(const string& cmd, Circuit& circuit) {
+vector<string> parseCommandLine(const string &cmd) {
+    vector<string> tokens;
     smatch match;
-
-    // ---------------------- Add Resistor ----------------------
+    // Add Resistor: e.g. "add R1 N1 N2 1k"
     if (regex_match(cmd, match, regex(R"(add\s+R([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-        string name = "R" + match[1].str();
-        Node* n1 = circuit.getOrCreateNode(match[2].str());
-        Node* n2 = circuit.getOrCreateNode(match[3].str());
-        double val = parseNumber(match[4].str());
-        circuit.addElement(new Resistor(name, n1, n2, val));
-        return;
+         tokens.push_back("addR");              // Action name
+         tokens.push_back(match[1].str());       // resistor identifier (suffix)
+         tokens.push_back(match[2].str());       // node1
+         tokens.push_back(match[3].str());       // node2
+         tokens.push_back(match[4].str());       // value
+         return tokens;
     }
-    // ---------------------- Delete Resistor ----------------------
+    // Delete Resistor: e.g. "delete R1"
     if (regex_match(cmd, match, regex(R"(delete\s+R([^ ]+))"))) {
-        string name = "R" + match[1].str();
-        circuit.deleteElement(name);
-        return;
+         tokens.push_back("deleteR");           // Action name
+         tokens.push_back(match[1].str());
+         return tokens;
     }
-    // ---------------------- Add Capacitor ----------------------
+    // Add Capacitor: e.g. "add C1 N1 N2 1u"
     if (regex_match(cmd, match, regex(R"(add\s+C([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-        string name = "C" + match[1].str();
-        Node* n1 = circuit.getOrCreateNode(match[2].str());
-        Node* n2 = circuit.getOrCreateNode(match[3].str());
-        double val = parseNumber(match[4].str());
-        circuit.addElement(new Capacitor(name, n1, n2, val));
-        return;
+         tokens.push_back("addC");              // Action name
+         tokens.push_back(match[1].str());
+         tokens.push_back(match[2].str());
+         tokens.push_back(match[3].str());
+         tokens.push_back(match[4].str());
+         return tokens;
     }
-    // ---------------------- List Elements ----------------------
+    // List Elements by type: e.g. "list Resistor"
     if (regex_match(cmd, match, regex(R"(list\s+([A-Za-z]+))"))) {
-        circuit.listElements(match[1].str());
-        return;
+         tokens.push_back("list");              // Action name
+         tokens.push_back(match[1].str());
+         return tokens;
     }
+    // List All Elements: "list"
     if (regex_match(cmd, regex(R"(list)"))) {
-        circuit.listElements();
-        return;
+         tokens.push_back("list");
+         return tokens;
     }
-    // ---------------------- Rename Node ----------------------
+    // Rename Node: e.g. "rename node oldName newName"
     if (regex_match(cmd, match, regex(R"(rename\s+node\s+([^ ]+)\s+([^ ]+))"))) {
-        circuit.renameNode(match[1].str(), match[2].str());
-        return;
+         tokens.push_back("rename");
+         tokens.push_back(match[1].str());
+         tokens.push_back(match[2].str());
+         return tokens;
     }
-    // ---------------------- Show Node List ----------------------
+    // Show Node List: ".nodes"
     if (regex_match(cmd, regex(R"(\.nodes)"))) {
-        circuit.listNodes();
-        return;
+         tokens.push_back(".nodes");
+         return tokens;
     }
-    // ---------------------- Analyze (Nodal Analysis) ----------------------
+    // Analyze: e.g. "analyze N3"
     if (regex_match(cmd, match, regex(R"(analyze\s+([^ ]+))"))) {
-        string ground = match[1].str();
-        circuit.solveNodalAnalysis(ground);
-        return;
+         tokens.push_back("analyze");
+         tokens.push_back(match[1].str());
+         return tokens;
     }
+    return tokens; // returns empty vector if no match
+}
 
-    cout << "ERROR: Unknown or malformed command" << endl;
+// ------------------- Input Handler Function -------------------
+void inputHandler(const string &input, Circuit &circuit) {
+    vector<string> tokens = parseCommandLine(input);
+    if (tokens.empty()) {
+         cout << "ERROR: Unknown or malformed command" << endl;
+         return;
+    }
+    string action = tokens[0];
+    if (action == "addR") {
+         // Tokens: [0]="addR", [1]=resistor suffix, [2]=node1, [3]=node2, [4]=value
+         string name = "R" + tokens[1];
+         Node* n1 = circuit.getOrCreateNode(tokens[2]);
+         Node* n2 = circuit.getOrCreateNode(tokens[3]);
+         double val = parseNumber(tokens[4]);
+         circuit.addElement(new Resistor(name, n1, n2, val));
+    } else if (action == "deleteR") {
+         string name = "R" + tokens[1];
+         circuit.deleteElement(name);
+    } else if (action == "addC") {
+         string name = "C" + tokens[1];
+         Node* n1 = circuit.getOrCreateNode(tokens[2]);
+         Node* n2 = circuit.getOrCreateNode(tokens[3]);
+         double val = parseNumber(tokens[4]);
+         circuit.addElement(new Capacitor(name, n1, n2, val));
+    } else if (action == "list") {
+         if (tokens.size() == 2)
+             circuit.listElements(tokens[1]);  // list by type
+         else
+             circuit.listElements();             // list all
+    } else if (action == "rename") {
+         if (tokens.size() >= 3)
+             circuit.renameNode(tokens[1], tokens[2]);
+    } else if (action == ".nodes") {
+         circuit.listNodes();
+    } else if (action == "analyze") {
+         if (tokens.size() >= 2)
+             circuit.solveNodalAnalysis(tokens[1]);
+    } else {
+         cout << "ERROR: Unknown command action" << endl;
+    }
 }
 
 
 
 
 
+void processInput(Circuit &circuit) {
+    string input;
+    cout << "Enter command (or 'exit' to quit):" << endl;
+    while (getline(cin, input)) {
+        if (input == "exit")
+            break;
+        try {
+            inputHandler(input, circuit);
+        }
+        catch (const exception &e) {  // This will catch any of your custom exceptions too.
+            cout << e.what() << endl;
+        }
+    }
+}
 // -------------------- main function with a test -----------------------
 int main() {
     Circuit circuit;
@@ -438,6 +554,12 @@ int main() {
 
     // Run nodal analysis with N3 as ground.
     circuit.solveNodalAnalysis("N3");
-
+    try {
+        Circuit circuit;
+        processInput(circuit);
+    }
+    catch (const exception &e) {
+        cout << "Unexpected exception: " << e.what() << endl;
+    }
     return 0;
 }
