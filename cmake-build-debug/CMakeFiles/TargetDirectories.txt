@@ -1,0 +1,3 @@
+D:/projects/OOP_cLion/Opulator/cmake-build-debug/CMakeFiles/Opulator.dir
+D:/projects/OOP_cLion/Opulator/cmake-build-debug/CMakeFiles/edit_cache.dir
+D:/projects/OOP_cLion/Opulator/cmake-build-debug/CMakeFiles/rebuild_cache.dir
