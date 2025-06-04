@@ -473,6 +473,38 @@ vector<string> parseCommandLine(const string &cmd) {
          tokens.push_back(match[1].str());
          return tokens;
     }
+
+    // Add Inductor: e.g. "add L1 N1 N2 1m"
+    if (regex_match(cmd, match, regex(R"(add\s+L([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+        tokens.push_back("addL");
+        tokens.push_back(match[1].str());
+        tokens.push_back(match[2].str());
+        tokens.push_back(match[3].str());
+        tokens.push_back(match[4].str());
+        return tokens;
+    }
+
+// Add Voltage Source: e.g. "add V1 N1 N2 5"
+    if (regex_match(cmd, match, regex(R"(add\s+V([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+        tokens.push_back("addV");
+        tokens.push_back(match[1].str());
+        tokens.push_back(match[2].str());
+        tokens.push_back(match[3].str());
+        tokens.push_back(match[4].str());
+        return tokens;
+    }
+
+// Add Current Source: e.g. "add I1 N1 N2 10m"
+    if (regex_match(cmd, match, regex(R"(add\s+I([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+        tokens.push_back("addI");
+        tokens.push_back(match[1].str());
+        tokens.push_back(match[2].str());
+        tokens.push_back(match[3].str());
+        tokens.push_back(match[4].str());
+        return tokens;
+    }
+
+
     return tokens; // returns empty vector if no match
 }
 
@@ -500,6 +532,26 @@ void inputHandler(const string &input, Circuit &circuit) {
          Node* n2 = circuit.getOrCreateNode(tokens[3]);
          double val = parseNumber(tokens[4]);
          circuit.addElement(new Capacitor(name, n1, n2, val));
+    }else if (action == "addL") {
+        string name = "L" + tokens[1];
+        Node* n1 = circuit.getOrCreateNode(tokens[2]);
+        Node* n2 = circuit.getOrCreateNode(tokens[3]);
+        double val = parseNumber(tokens[4]);
+        circuit.addElement(new Inductor(name, n1, n2, val));
+    }
+    else if (action == "addV") {
+        string name = "V" + tokens[1];
+        Node* n1 = circuit.getOrCreateNode(tokens[2]);
+        Node* n2 = circuit.getOrCreateNode(tokens[3]);
+        double val = parseNumber(tokens[4]);
+        circuit.addElement(new VoltageSource(name, n1, n2, val));
+    }
+    else if (action == "addI") {
+        string name = "I" + tokens[1];
+        Node* n1 = circuit.getOrCreateNode(tokens[2]);
+        Node* n2 = circuit.getOrCreateNode(tokens[3]);
+        double val = parseNumber(tokens[4]);
+        circuit.addElement(new CurrentSource(name, n1, n2, val));
     } else if (action == "list") {
          if (tokens.size() == 2)
              circuit.listElements(tokens[1]);  // list by type
@@ -540,20 +592,20 @@ void processInput(Circuit &circuit) {
 int main() {
     Circuit circuit;
     // Pre-create nodes using getOrCreateNode.
-    Node* n1 = circuit.getOrCreateNode("N1");
-    Node* n2 = circuit.getOrCreateNode("N2");
-    Node* n3 = circuit.getOrCreateNode("N3"); // ground
+//    Node* n1 = circuit.getOrCreateNode("N1");
+//    Node* n2 = circuit.getOrCreateNode("N2");
+//    Node* n3 = circuit.getOrCreateNode("N3"); // ground
 
     // Add elements.
-    circuit.addElement(new Resistor("R1", n1, n2, 1000));
-    circuit.addElement(new Resistor("R2", n2, n3, 2000));
-    circuit.addElement(new CurrentSource("I1", n1, n3, 0.01));
+//    circuit.addElement(new Resistor("R1", n1, n2, 1000));
+//    circuit.addElement(new Resistor("R2", n2, n3, 2000));
+//    circuit.addElement(new CurrentSource("I1", n1, n3, 0.01));
 
-    circuit.listElements();
-    circuit.listNodes();
+//    circuit.listElements();
+//    circuit.listNodes();
 
     // Run nodal analysis with N3 as ground.
-    circuit.solveNodalAnalysis("N3");
+//    circuit.solveNodalAnalysis("N3");
     try {
         Circuit circuit;
         processInput(circuit);
