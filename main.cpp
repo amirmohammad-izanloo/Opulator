@@ -1,8 +1,18 @@
 #include <bits/stdc++.h>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <regex>
+#include <map>
+#include <exception>
+#include <cstdlib>
+#include <cmath>
+#include <complex>
 
 using namespace std;
 
-//------------------- Error exception ----------------------
+//================ Custom Exception Classes =================
 class NoGroundException : public exception {
 public:
     const char* what() const noexcept override {
@@ -45,11 +55,13 @@ public:
     }
 };
 
-//-------------------- parse number ---------------------------
+//================ Helper Function ===========================
+// Parses a number string with support for unit prefixes (k, m, u)
 double parseNumber(string input) {
     double result = 0;
     char last = input[input.length() - 1];
     string numberPart;
+
     if (last == 'k' || last == 'K') {
         numberPart = input.substr(0, input.length() - 1);
         result = stod(numberPart) * 1000;
@@ -65,22 +77,60 @@ double parseNumber(string input) {
     return result;
 }
 
-//------------------- node ----------------------
-class Node {
+//================ Schematic Structure & Global Storage ============
+struct Schematic {
     string name;
-    int voltage;
-public:
-    Node(const string& nodeName = "", int volt = 0)
-            : name(nodeName), voltage(volt) {}
-
-    string getName() const { return name; }
-    void setName(const string& newName) { name = newName; }
-
-    int getVoltage() const { return voltage; }
-    void setVoltage(int v) { voltage = v; }
+    string schematichPath;
+    vector<string> lines;
 };
 
-//------------------- classes -------------------
+vector<Schematic> gSchematics;
+
+//================ File Menu Functions ==========================
+// Extracts a file name from a given file path
+string extractFileName(const string &filePath) {
+    size_t pos = filePath.find_last_of("/\\");
+    if (pos != string::npos)
+        return filePath.substr(pos+1);
+    else
+        return filePath;
+}
+
+
+//================ Gaussian Elimination Function =================
+vector<double> gaussianElimination(vector<vector<double>> A, vector<double> b) {
+    int n = A.size();
+    for (int i = 0; i < n; i++) {
+        double pivot = A[i][i];
+        if (pivot == 0)
+            throw SingularMatrixException();
+        for (int j = i; j < n; j++)
+            A[i][j] /= pivot;
+        b[i] /= pivot;
+        for (int k = i + 1; k < n; k++) {
+            double factor = A[k][i];
+            for (int j = i; j < n; j++)
+                A[k][j] -= factor * A[i][j];
+            b[k] -= factor * b[i];
+        }
+    }
+    vector<double> x(n, 0.0);
+    for (int i = n - 1; i >= 0; i--) {
+        x[i] = b[i];
+        for (int j = i + 1; j < n; j++)
+            x[i] -= A[i][j] * x[j];
+    }
+    return x;
+}
+//================ Circuit Classes (Nodes/Elements) ==============
+class Node {
+    string name;
+public:
+    Node(const string& nodeName) : name(nodeName) { }
+    string getName() const { return name; }
+    void setName(const string& newName) { name = newName; }
+};
+
 class Element {
 protected:
     string name;
@@ -88,134 +138,117 @@ protected:
     Node* n2;
     double value;
     string unit;
-    string type;
 public:
     Element(const string &elemName, Node* node1, Node* node2, double val, const string &unitType)
-            : name(elemName), n1(node1), n2(node2), value(val), unit(unitType) {}
-
-    virtual string getInfo() const {
-        ostringstream oss;
-        oss << name << " " << n1->getName() << " " << n2->getName() << " " << value << " " << unit;
-        return oss.str();
-    }
-    virtual Node* getNode1() const { return n1; }
-    virtual Node* getNode2() const { return n2; }
-
-    string getName() { return name; }
-
-    virtual double getValue() { return value; }
+            : name(elemName), n1(node1), n2(node2), value(val), unit(unitType) { }
+    virtual ~Element() { }
 
     virtual string getType() const = 0;
 
-    virtual ~Element() {}
+    virtual string getInfo() const {
+        ostringstream oss;
+        oss << name << " (" << getType() << ") "
+            << n1->getName() << " " << n2->getName() << " "
+            << value << " " << unit;
+        return oss.str();
+    }
+
+    string getName() const { return name; }
+    double getValue() const { return value; }
+    Node* getNode1() const { return n1; }
+    Node* getNode2() const { return n2; }
 };
 
 class Resistor : public Element {
-    double conductance;
 public:
-    Resistor(const string &elemName, Node* node1, Node* node2, double resistance)
-            : Element(elemName, node1, node2, resistance, "Ohm") {
+    Resistor(const string &elemName, Node* a, Node* b, double resistance)
+            : Element(elemName, a, b, resistance, "Ohm") {
         if (resistance <= 0)
             throw InvalidValueException();
     }
-
     string getType() const override { return "Resistor"; }
 };
 
 class Capacitor : public Element {
 public:
-    Capacitor(const string &elemName, Node* node1, Node* node2, double capacitance)
-            : Element(elemName, node1, node2, capacitance, "Farad") {}
-
+    Capacitor(const string &elemName, Node* a, Node* b, double capacitance)
+            : Element(elemName, a, b, capacitance, "Farad") {
+        if (capacitance <= 0)
+            throw InvalidValueException();
+    }
     string getType() const override { return "Capacitor"; }
 };
 
 class Inductor : public Element {
-private:
-    double current = 0.0; // جریان لحظه‌ای سلف
-
 public:
-    Inductor(const string &elemName, Node* node1, Node* node2, double inductance)
-            : Element(elemName, node1, node2, inductance, "Henry") {}
-
+    Inductor(const string &elemName, Node* a, Node* b, double inductance)
+            : Element(elemName, a, b, inductance, "Henry") {
+        if (inductance <= 0)
+            throw InvalidValueException();
+    }
     string getType() const override { return "Inductor"; }
-
-    double getCurrent() const { return current; }
-    void setCurrent(double newCurrent) { current = newCurrent; }
 };
-
 
 class VoltageSource : public Element {
 public:
-    VoltageSource(const string &elemName, Node* node1, Node* node2, double voltage)
-            : Element(elemName, node1, node2, voltage, "Volt") {}
 
-    string getType() const override { return "VS"; }
+    double amplitude = 0;
+    double frequency = 0;
+    bool isSine = false;
+
+    VoltageSource(const string &elemName, Node* node1, Node* node2, double offset,
+                  double amp = 0, double freq = 0)
+            : Element(elemName, node1, node2, offset, "Volt"),
+              amplitude(amp), frequency(freq)
+    {
+        if (amp > 0 && freq > 0)
+            isSine = true;
+    }
+
+    string getType() const override { return "VoltageSource"; }
 };
 
 class CurrentSource : public Element {
 public:
-    CurrentSource(const string &elemName, Node* node1, Node* node2, double current)
-            : Element(elemName, node1, node2, current, "Ampere") {}
-
-    string getType() const override { return "CS"; }
+    CurrentSource(const string &elemName, Node* a, Node* b, double current)
+            : Element(elemName, a, b, current, "Ampere") { }
+    string getType() const override { return "CurrentSource"; }
 };
 
-//------------------- Gaussian Elimination Solver -------------------
-vector<double> gaussianElimination(vector<vector<double>> A, vector<double> b) {
-    int n = A.size();
-    for (int i = 0; i < n; i++) {
-        double pivot = A[i][i];
-        if (abs(pivot) < 1e-10) {
-            throw SingularMatrixException();
-        }
-        for (int j = i; j < n; j++) {
-            A[i][j] /= pivot;
-        }
-        b[i] /= pivot;
-        for (int k = i + 1; k < n; k++) {
-            double factor = A[k][i];
-            for (int j = i; j < n; j++) {
-                A[k][j] -= factor * A[i][j];
-            }
-            b[k] -= factor * b[i];
-        }
-    }
-    vector<double> x(n, 0.0);
-    for (int i = n - 1; i >= 0; i--) {
-        x[i] = b[i];
-        for (int j = i + 1; j < n; j++) {
-            x[i] -= A[i][j] * x[j];
-        }
-    }
-    return x;
-}
-
-//---------------------------------------------------
+//================ Circuit Class ============================
 class Circuit {
+public:
     vector<Node*> nodes;
     vector<Element*> elements;
-    map<string, double> prevNodeVoltages;
-    map<string, double> capacitorCurrents;
-    map<string, double> inductorCurrents;
-    set<string> groundNodes; // مجموعه گره‌های زمین
-public:
-    double timeStep = 0.001;
-    double tStart = 0.0;
-    double tStop = 0.1;
-    double tMaxStep = 0.001;
-    int totalSteps = 100;
+//    set<string> groundNodes;
+    string groundName;
+
+    string schematicPath = "";
 
     ~Circuit() {
-        for (auto node : nodes) delete node;
-        for (auto elem : elements) delete elem;
+        for (auto node : nodes)
+            delete node;
+        for (auto elem : elements)
+            delete elem;
+    }
+
+    void reset() {
+        for (auto node : nodes)
+            delete node;
+        nodes.clear();
+
+        for (auto elem : elements)
+            delete elem;
+        elements.clear();
+
+        groundName = "";
+        schematicPath = "";
     }
 
     Node* getOrCreateNode(const string& nodeName) {
-        for (auto node : nodes) {
+        for (auto node : nodes)
             if (node->getName() == nodeName)
                 return node;
-        }
         Node* newNode = new Node(nodeName);
         nodes.push_back(newNode);
         return newNode;
@@ -225,75 +258,259 @@ public:
         elements.push_back(elem);
     }
 
-    void deleteElement(const string& elemName) {
-        for (auto it = elements.begin(); it != elements.end(); ++it) {
+    void deleteElement(const string &elemName) {
+        for (auto it = elements.begin(); it != elements.end(); it++) {
             if ((*it)->getName() == elemName) {
                 delete *it;
                 elements.erase(it);
-                break;
+                cout << "Deleted element: " << elemName << endl;
+                return;
             }
+        }
+        cout << "Element " << elemName << " not found." << endl;
+    }
+
+    void listElements(const string &filter = "") const {
+        cout << "\nElements in Circuit:" << endl;
+        for (auto elem : elements) {
+            if (filter == "" || elem->getType() == filter)
+                cout << elem->getInfo() << endl;
         }
     }
 
-    void listElements(const string& type = "") const {
-        for (const auto& e : elements) {
-            if (type == "" || e->getType() == type) {
-                cout << e->getInfo() << endl;
-            }
-        }
-    }
-
-    void renameNode(const string& oldName, const string& newName) {
+    void renameNode(const string &oldName, const string &newName) {
         for (auto node : nodes) {
             if (node->getName() == newName)
                 throw DuplicateNameException();
         }
         Node* target = nullptr;
-        for (auto node : nodes) {
+        for (auto node : nodes)
             if (node->getName() == oldName)
                 target = node;
-        }
-        if (target) {
-            target->setName(newName);
-            cout << "SUCCESS: Node renamed from " << oldName << " to " << newName << endl;
-        } else {
-            cout << "ERROR: Node " << oldName << " does not exist\n";
-        }
+        if (!target)
+            throw runtime_error(string("Error: Node ") + oldName + " does not exist.");
+        target->setName(newName);
+        cout << "SUCCESS: Node renamed from " << oldName << " to " << newName << endl;
     }
 
     void listNodes() const {
-        cout << "Available nodes:\n";
-        for (const auto& node : nodes) {
+        cout << "\nNodes in Circuit:" << endl;
+        for (auto node : nodes)
             cout << node->getName() << endl;
-        }
     }
 
-    void clearPrevVoltages() {
-        prevNodeVoltages.clear();
+    //------------------ Steady-State Nodal Analysis ------------------
+    void solveNodalAnalysis() {
+        bool foundGround = false;
         for (auto node : nodes) {
-            prevNodeVoltages[node->getName()] = 0.0;
+            if (node->getName() == groundName) { foundGround = true; break; }
         }
-    }
+        if (!foundGround)
+            throw NoGroundException();
 
-    void updateCapacitorCurrents() {
-        capacitorCurrents.clear();
+        vector<Node*> unknownNodes;
+        for (auto node : nodes)
+            if (node->getName() != groundName)
+                unknownNodes.push_back(node);
+
+        int n = unknownNodes.size();
+        if (n == 0) {
+            cout << "All nodes are ground!" << endl;
+            return;
+        }
+
+        map<string, int> nodeIndex;
+        for (int i = 0; i < n; i++)
+            nodeIndex[unknownNodes[i]->getName()] = i;
+
+        vector<vector<double>> A(n, vector<double>(n, 0.0));
+        vector<double> b(n, 0.0);
+
         for (auto elem : elements) {
-            if (auto cap = dynamic_cast<Capacitor*>(elem)) {
-                string name = cap->getName();
-                double C = cap->getValue();
-                double Vprev = prevNodeVoltages[cap->getNode1()->getName()] -
-                               prevNodeVoltages[cap->getNode2()->getName()];
-                double Geq = C / timeStep;
-                capacitorCurrents[name] = -Geq * Vprev;
+            // Process resistors.
+            Resistor* r = dynamic_cast<Resistor*>(elem);
+            if (r != nullptr) {
+                double g = 1.0 / r->getValue();
+                string nodeA = r->getNode1()->getName();
+                string nodeB = r->getNode2()->getName();
+                if (nodeA != groundName && nodeB != groundName) {
+                    int i = nodeIndex[nodeA], j = nodeIndex[nodeB];
+                    A[i][i] += g;
+                    A[j][j] += g;
+                    A[i][j] -= g;
+                    A[j][i] -= g;
+                } else if (nodeA == groundName && nodeB != groundName) {
+                    int j = nodeIndex[nodeB];
+                    A[j][j] += g;
+                } else if (nodeB == groundName && nodeA != groundName) {
+                    int i = nodeIndex[nodeA];
+                    A[i][i] += g;
+                }
+            }
+
+
+            VoltageSource* vs = dynamic_cast<VoltageSource*>(elem);
+            if (vs != nullptr) {
+                double V = vs->getValue();
+                const double G_big = 1e6;
+                string nodeA = vs->getNode1()->getName();
+                string nodeB = vs->getNode2()->getName();
+
+                if (nodeA == groundName && nodeB != groundName) {
+                    int j = nodeIndex[nodeB];
+                    A[j][j] += G_big;
+                    b[j] -= V * G_big;
+                } else if (nodeB == groundName && nodeA != groundName) {
+                    int i = nodeIndex[nodeA];
+                    A[i][i] += G_big;
+                    b[i] += V * G_big;
+                } else {
+                    cout << "Warning: Voltage source " << vs->getName()
+                         << " is not connected to ground. Skipping it." << endl;
+                }
+            }
+
+
+            // Process current sources.
+            CurrentSource* cs = dynamic_cast<CurrentSource*>(elem);
+            if (cs != nullptr) {
+                double I = cs->getValue();
+                string nodeA = cs->getNode1()->getName();
+                string nodeB = cs->getNode2()->getName();
+                if (nodeA != groundName && nodeB != groundName) {
+                    b[nodeIndex[nodeA]] += I;
+                    b[nodeIndex[nodeB]] -= I;
+                } else if (nodeA == groundName && nodeB != groundName) {
+                    b[nodeIndex[nodeB]] -= I;
+                } else if (nodeB == groundName && nodeA != groundName) {
+                    b[nodeIndex[nodeA]] += I;
+                }
             }
         }
+
+        try {
+            vector<double> voltages = gaussianElimination(A, b);
+            cout << "\nNodal Voltages (with ground node " << groundName << " = 0 V):" << endl;
+            for (auto &p : nodeIndex)
+                cout << p.first << " = " << voltages[p.second] << " V" << endl;
+        }
+        catch (const SingularMatrixException &e) {
+            cout << e.what() << endl;
+        }
+        catch (const exception &e) {
+            cout << "Error during analysis: " << e.what() << endl;
+        }
     }
 
-    // grok #####################################################################
+
+
+    //------------------ Transient RC Simulation ------------------
+    void simulateRC(double R, double C, double Vin, double dt, double totalTime) {
+        if (R <= 0 || C <= 0) {
+            cout << "Error: Negative or zero value for a component is invalid." << endl;
+            return;
+        }
+        double Vc = 0.0;
+        int steps = totalTime / dt;
+        cout << "\nSimulating RC Circuit:" << endl;
+        cout << "Time(s) | Vc(V)" << endl;
+        cout << "-------------------" << endl;
+        for (int i = 0; i <= steps; i++) {
+            double time = i * dt;
+            cout << time << " | " << Vc << endl;
+            Vc = Vc + dt * ((Vin - Vc) / (R * C));
+        }
+    }
+
+    //------------------ AC Analysis Simulation ------------------
+    void simulateAC(double R, double L, double C, double Vin, double startFreq, double endFreq, double stepFreq) {
+        std::complex<double> j(0.0, 1.0);
+        cout << "\nAC Analysis Simulation (Series RLC):" << endl;
+        cout << "Freq(Hz) | Vout(V) | Phase(deg)" << endl;
+        cout << "---------------------------------" << endl;
+        for (double f = startFreq; f <= endFreq; f += stepFreq) {
+            double omega = 2 * M_PI * f;
+            std::complex<double> Z_R(R, 0.0);
+            std::complex<double> Z_L = j * omega * L;
+            std::complex<double> Z_C = 1.0 / (j * omega * C);
+            std::complex<double> Z_total = Z_R + Z_L + Z_C;
+
+            double Vout = Vin * abs(Z_C) / abs(Z_total);
+            double phase = arg(Z_C / Z_total) * 180.0 / M_PI;
+
+            cout << f << " | " << Vout << " | " << phase << endl;
+        }
+    }
+
+    //------------------ Transient RLC Simulation ------------------
+    void simulateRLC(double R, double L, double C, double Vin, double dt, double totalTime) {
+        if (R <= 0 || L <= 0 || C <= 0) {
+            cout << "Error: Negative or zero value for a component is invalid." << endl;
+            return;
+        }
+        double x1 = 0.0; // Vc
+        double x2 = 0.0; // dVc/dt
+        int steps = totalTime / dt;
+        cout << "\nSimulating RLC Circuit:" << endl;
+        cout << "Time(s) | Vc(V) | dVc/dt (V/s)" << endl;
+        cout << "---------------------------------" << endl;
+        for (int i = 0; i <= steps; i++) {
+            double time = i * dt;
+            cout << time << " | " << x1 << " | " << x2 << endl;
+            double x1_next = x1 + dt * x2;
+            double x2_next = x2 + dt * ((Vin - x1 - R * C * x2) / (L * C));
+            x1 = x1_next;
+            x2 = x2_next;
+        }
+    }
+
+    //------------------ Part 16: Transient FFT Analysis ------------------
+    // Simulate an RC circuit transient response and calculate its DFT.
+    void simulateFFT(double R, double C, double Vin, double dt, double totalTime) {
+        if (R <= 0 || C <= 0) {
+            cout << "Error: Negative or zero value for a component is invalid." << endl;
+            return;
+        }
+        int steps = totalTime / dt;
+        vector<double> signal;
+        double Vc = 0.0;
+        for (int i = 0; i <= steps; i++) {
+            signal.push_back(Vc);
+            Vc = Vc + dt * ((Vin - Vc) / (R * C));
+        }
+        vector<complex<double>> spectrum = computeDFT(signal);
+        int N = signal.size();
+        cout << "\nFFT of the RC transient response:" << endl;
+        cout << "Freq(Hz) | Magnitude | Phase(deg)" << endl;
+        for (int k = 0; k < N/2; k++) {
+            double freq = k / (N * dt);
+            double mag = abs(spectrum[k]);
+            double phase = arg(spectrum[k]) * 180.0 / M_PI;
+            cout << freq << " | " << mag << " | " << phase << endl;
+        }
+    }
+
+    // Helper for DFT computation.
+    vector<complex<double>> computeDFT(const vector<double>& signal) {
+        int N = signal.size();
+        vector<complex<double>> X(N);
+        for (int k = 0; k < N; k++) {
+            complex<double> sum(0.0, 0.0);
+            for (int n = 0; n < N; n++) {
+                double angle = -2 * M_PI * k * n / N;
+                sum += signal[n] * complex<double>(cos(angle), sin(angle));
+            }
+            X[k] = sum;
+        }
+        return X;
+    }
+
+    // ------------------------- Ground --------------------------------
+
     void setGroundNode(const string& nodeName) {
         for (auto node : nodes) {
             if (node->getName() == nodeName) {
-                groundNodes.insert(nodeName);
+                groundName = nodeName;
                 cout << "Ground node added: " << nodeName << endl;
                 return;
             }
@@ -301,477 +518,332 @@ public:
         // اگر گره وجود ندارد، آن را ایجاد می‌کنیم
         Node* newNode = new Node(nodeName);
         nodes.push_back(newNode);
-        groundNodes.insert(nodeName);
+        groundName = nodeName;
         cout << "Ground node created and added: " << nodeName << endl;
     }
 
-    const set<string>& getGroundNodes() const {
-        return groundNodes;
+    const string getGroundNodes() const {
+        return groundName;
     }
 
-    void clearPrev() {
-        prevNodeVoltages.clear();
-        inductorCurrents.clear();
-        for (Node* node : nodes) {
-            prevNodeVoltages[node->getName()] = 0.0;
-            for (auto elem : elements) {
-                if (dynamic_cast<Inductor*>(elem)) {
-                    inductorCurrents[elem->getName()] = 0.0;
-                }
-            }
-        }
-    }
-
-
-
-    void updateInductorCurrents() {
-        for (auto elem : elements) {
-            if (auto ind = dynamic_cast<Inductor*>(elem)) {
-                int n1 = ind->getNode1()->getVoltage();
-                int n2 = ind->getNode2()->getVoltage();
-
-                double voltage = n1 - n2;
-                double L = ind->getValue(); // چون از Element ارث‌بری کرده، getValue همان مقدار سلف است
-                double dt = timeStep;
-
-                double di = (voltage / L) * dt;
-                double newCurrent = ind->getCurrent() + di;
-                ind->setCurrent(newCurrent);
-            }
-        }
-    }
-
-
-
-
-
-
-
-    void solveTransientAnalysis() {
-        if (groundNodes.empty()) {
-            groundNodes.insert("0"); // پیش‌فرض "0" اگر هیچ زمینی تعریف نشده
-            cout << "No ground nodes defined, using default ground: 0" << endl;
-        }
-
-        bool foundGround = false;
-        for (auto node : nodes) {
-            if (groundNodes.count(node->getName()) > 0) {
-                foundGround = true;
-                break;
-            }
-        }
-        if (!foundGround) throw NoGroundException();
-
-        vector<Node*> unknownNodes;
-        for (auto node : nodes) {
-            if (groundNodes.count(node->getName()) == 0) // گره‌های غیرزمین
-                unknownNodes.push_back(node);
-        }
-        int n = unknownNodes.size();
-        if (n == 0) {
-            cout << "No unknown nodes to solve for." << endl;
+    //------------------ Part 17: Parameter Sweep Simulation ------------------
+    // Sweep the resistor value for an RC circuit and estimate the time constant (τ) as the time when Vc first exceeds 63.2% of Vin.
+    void simulateSweep(double startR, double endR, double stepR, double C, double Vin, double dt, double totalTime) {
+        if (C <= 0 || Vin <= 0 || dt <= 0 || totalTime <= 0) {
+            cout << "Error: Invalid simulation parameters." << endl;
             return;
         }
-
-        map<string, int> nodeIndex;
-        for (int i = 0; i < n; i++) {
-            nodeIndex[unknownNodes[i]->getName()] = i;
-        }
-
-        vector<vector<double>> results(totalSteps, vector<double>(n, 0.0));
-        vector<double> times(totalSteps, 0.0);
-
-        clearPrev();
-        updateCapacitorCurrents();
-        updateInductorCurrents();
-
-        for (int step = 0; step < totalSteps; step++) {
-            double t = tStart + step * timeStep;
-            times[step] = t;
-
-            vector<vector<double>> A(n, vector<double>(n, 0.0));
-            vector<double> b(n, 0.0);
-
-            for (auto elem : elements) {
-                if (auto r = dynamic_cast<Resistor*>(elem)) {
-                    double g = 1.0 / r->getValue();
-                    string nodeA = r->getNode1()->getName();
-                    string nodeB = r->getNode2()->getName();
-                    if (groundNodes.count(nodeA) == 0 && groundNodes.count(nodeB) == 0) {
-                        int i = nodeIndex[nodeA];
-                        int j = nodeIndex[nodeB];
-                        A[i][i] += g;
-                        A[j][j] += g;
-                        A[i][j] -= g;
-                        A[j][i] -= g;
-                    } else if (groundNodes.count(nodeA) > 0 && groundNodes.count(nodeB) == 0) {
-                        int j = nodeIndex[nodeB];
-                        A[j][j] += g;
-                    } else if (groundNodes.count(nodeB) > 0 && groundNodes.count(nodeA) == 0) {
-                        int i = nodeIndex[nodeA];
-                        A[i][i] += g;
-                    }
+        cout << "\nParameter Sweep Simulation for RC Circuit:" << endl;
+        cout << "R(Ohm) | Estimated Tau (s)" << endl;
+        cout << "---------------------------" << endl;
+        for (double R = startR; R <= endR; R += stepR) {
+            double Vc = 0.0;
+            double tau = totalTime;
+            int steps = totalTime / dt;
+            bool found = false;
+            for (int i = 0; i <= steps; i++) {
+                double time = i * dt;
+                if (!found && Vc >= 0.632 * Vin) {
+                    tau = time;
+                    found = true;
                 }
-
-                if (auto cs = dynamic_cast<CurrentSource*>(elem)) {
-                    double I = cs->getValue();
-                    string nodeA = cs->getNode1()->getName();
-                    string nodeB = cs->getNode2()->getName();
-                    if (groundNodes.count(nodeA) == 0 && groundNodes.count(nodeB) == 0) {
-                        b[nodeIndex[nodeA]] += I;
-                        b[nodeIndex[nodeB]] -= I;
-                    } else if (groundNodes.count(nodeA) > 0 && groundNodes.count(nodeB) == 0) {
-                        b[nodeIndex[nodeB]] -= I;
-                    } else if (groundNodes.count(nodeB) > 0 && groundNodes.count(nodeA) == 0) {
-                        b[nodeIndex[nodeA]] += I;
-                    }
-                }
-
-                if (auto cap = dynamic_cast<Capacitor*>(elem)) {
-                    double C = cap->getValue();
-                    double Geq = C / timeStep;
-                    double Ieq = capacitorCurrents[cap->getName()];
-                    string nodeA = cap->getNode1()->getName();
-                    string nodeB = cap->getNode2()->getName();
-                    if (groundNodes.count(nodeA) == 0 && groundNodes.count(nodeB) == 0) {
-                        int i = nodeIndex[nodeA];
-                        int j = nodeIndex[nodeB];
-                        A[i][i] += Geq;
-                        A[j][j] += Geq;
-                        A[i][j] -= Geq;
-                        A[j][i] -= Geq;
-                        b[i] += Ieq;
-                        b[j] -= Ieq;
-                    } else if (groundNodes.count(nodeA) > 0 && groundNodes.count(nodeB) == 0) {
-                        int j = nodeIndex[nodeB];
-                        A[j][j] += Geq;
-                        b[j] -= Ieq;
-                    } else if (groundNodes.count(nodeB) > 0 && groundNodes.count(nodeA) == 0) {
-                        int i = nodeIndex[nodeA];
-                        A[i][i] += Geq;
-                        b[i] += Ieq;
-                    }
-                }
-
-                if (auto vs = dynamic_cast<VoltageSource*>(elem)) {
-                    double V = vs->getValue();
-                    const double G_big = 1e6;
-                    string nodeA = vs->getNode1()->getName();
-                    string nodeB = vs->getNode2()->getName();
-                    if (groundNodes.count(nodeA) > 0 && groundNodes.count(nodeB) == 0) {
-                        int j = nodeIndex[nodeB];
-                        A[j][j] += G_big;
-                        b[j] += V * G_big;
-                    } else if (groundNodes.count(nodeB) > 0 && groundNodes.count(nodeA) == 0) {
-                        int i = nodeIndex[nodeA];
-                        A[i][i] += G_big;
-                        b[i] += V * G_big;
-                    } else {
-                        cout << "Warning: Voltage source " << vs->getName()
-                             << " requires full MNA. Skipping." << endl;
-                    }
-                }
-
-                if (auto ind = dynamic_cast<Inductor*>(elem)) {
-                    double L = ind->getValue();
-                    double Geq = timeStep / L;
-                    double Ieq = inductorCurrents[ind->getName()];
-                    string nodeA = ind->getNode1()->getName();
-                    string nodeB = ind->getNode2()->getName();
-                    if (groundNodes.count(nodeA) == 0 && groundNodes.count(nodeB) == 0) {
-                        int i = nodeIndex[nodeA];
-                        int j = nodeIndex[nodeB];
-                        A[i][i] += Geq;
-                        A[j][j] += Geq;
-                        A[i][j] -= Geq;
-                        A[j][i] -= Geq;
-                        b[i] += Ieq;
-                        b[j] -= Ieq;
-                    } else if (groundNodes.count(nodeA) > 0 && groundNodes.count(nodeB) == 0) {
-                        int j = nodeIndex[nodeB];
-                        A[j][j] += Geq;
-                        b[j] -= Ieq;
-                    } else if (groundNodes.count(nodeB) > 0 && groundNodes.count(nodeA) == 0) {
-                        int i = nodeIndex[nodeA];
-                        A[i][i] += Geq;
-                        b[i] += Ieq;
-                    }
-                }
+                Vc = Vc + dt * ((Vin - Vc) / (R * C));
             }
-
-            try {
-                vector<double> voltages = gaussianElimination(A, b);
-                for (int i = 0; i < n; i++) {
-                    results[step][i] = voltages[i];
-                    prevNodeVoltages[unknownNodes[i]->getName()] = voltages[i];
-                }
-                updateCapacitorCurrents();
-                for (auto elem : elements) {
-                    if (auto ind = dynamic_cast<Inductor*>(elem)) {
-                        string name = ind->getName();
-                        double V = prevNodeVoltages[ind->getNode1()->getName()] -
-                                   prevNodeVoltages[ind->getNode2()->getName()];
-                        double Geq = timeStep / ind->getValue();
-                        inductorCurrents[name] = Geq * V + inductorCurrents[name];
-                    }
-                }
-            } catch (const SingularMatrixException &e) {
-                cout << e.what() << " at time " << t << endl;
-                return;
-            }
-        }
-
-        cout << "\nTransient Analysis Results (Ground nodes: ";
-        for (const auto& gnd : groundNodes) cout << gnd << " ";
-        cout << "= 0 V):\n";
-        cout << "Time(s)";
-        for (auto node : unknownNodes) {
-            cout << "\t" << node->getName() << "(V)";
-        }
-        cout << endl;
-        for (int step = 0; step < totalSteps; step++) {
-            cout << times[step];
-            for (int i = 0; i < n; i++) {
-                cout << "\t" << results[step][i];
-            }
-            cout << endl;
+            cout << R << " | " << tau << endl;
         }
     }
-
-    void solveNodalAnalysis(const string &groundName) {
-            if (groundNodes.empty()) {
-                groundNodes.insert("0");
-                cout << "No ground nodes defined, using default ground: 0" << endl;
-            } else {
-
-            // Build a list of unknown nodes (all nodes except the ground).
-            vector<Node*> unknownNodes;
-            bool foundGround = false;
-            for (auto node : nodes) {  // nodes is your container of Node* in your Circuit class
-                if (node->getName() == groundName) {
-                    foundGround = true;
-                    break;
-                }
-            }
-            if (!foundGround) throw NoGroundException();
-            for (auto node : nodes) {  // nodes is assumed as a container of Node* in your Circuit class
-                if (node->getName() != groundName)
-                    unknownNodes.push_back(node);
-            }
-
-            int n = unknownNodes.size();
-            if(n == 0) {
-                cout << "No unknown nodes to solve for (all nodes are ground?)" << endl;
-                return;
-            }
-            // Map node name to matrix index.
-            map<string, int> nodeIndex;
-            for (int i = 0; i < n; i++) {
-                nodeIndex[unknownNodes[i]->getName()] = i;
-            }
-
-            // Initialize matrix A (n x n) and vector b.
-            vector<vector<double>> A(n, vector<double>(n, 0.0));
-            vector<double> b(n, 0.0);
-
-            // Loop over all elements.
-            for (auto elem : elements) {
-                // Check for resistors.
-                Resistor* r = dynamic_cast<Resistor*>(elem);
-                if(r != nullptr) {
-                    double g = 1.0 / r->getValue(); // conductance
-                    string nodeA = r->getNode1()->getName();
-                    string nodeB = r->getNode2()->getName();
-                    if(nodeA != groundName && nodeB != groundName) {
-                        int i = nodeIndex[nodeA];
-                        int j = nodeIndex[nodeB];
-                        A[i][i] += g;
-                        A[j][j] += g;
-                        A[i][j] -= g;
-                        A[j][i] -= g;
-                    } else if(nodeA == groundName && nodeB != groundName) {
-                        int j = nodeIndex[nodeB];
-                        A[j][j] += g;
-                    } else if(nodeB == groundName && nodeA != groundName) {
-                        int i = nodeIndex[nodeA];
-                        A[i][i] += g;
-                    }
-                }
-
-                // Check for current sources.
-                CurrentSource* cs = dynamic_cast<CurrentSource*>(elem);
-                if(cs != nullptr) {
-                    double I = cs->getValue(); // positive: injection into node1, leaving node2.
-                    string nodeA = cs->getNode1()->getName();
-                    string nodeB = cs->getNode2()->getName();
-                    if(nodeA != groundName && nodeB != groundName) {
-                        b[nodeIndex[nodeA]] += I;
-                        b[nodeIndex[nodeB]] -= I;
-                    } else if(nodeA == groundName && nodeB != groundName) {
-                        b[nodeIndex[nodeB]] -= I;
-                    } else if(nodeB == groundName && nodeA != groundName) {
-                        b[nodeIndex[nodeA]] += I;
-                    }
-                }
-
-                // Check for capacitors: For DC analysis, treat as open-circuit (no effect).
-                Capacitor* cap = dynamic_cast<Capacitor*>(elem);
-                if(cap != nullptr) {
-                    // No contribution in DC (steady-state) analysis.
-                }
-
-                // Check for voltage sources.
-                VoltageSource* vs = dynamic_cast<VoltageSource*>(elem);
-                if(vs != nullptr) {
-                    // Simplified handling: if one of the nodes is ground, force the other node to the source voltage.
-                    // We add a very large conductance (G_big) into the diagonal entry. Otherwise, we'll just print a warning.
-                    double V = vs->getValue();
-                    const double G_big = 1e6; // A large conductance value.
-                    string nodeA = vs->getNode1()->getName();
-                    string nodeB = vs->getNode2()->getName();
-                    if(nodeA == groundName && nodeB != groundName) {
-                        int j = nodeIndex[nodeB];
-                        A[j][j] += G_big;
-                        b[j] += V * G_big;
-                    } else if(nodeB == groundName && nodeA != groundName) {
-                        int i = nodeIndex[nodeA];
-                        A[i][i] += G_big;
-                        b[i] += V * G_big;
-                    } else {
-                        // More advanced MNA needed if voltage source is between two non-ground nodes.
-                        cout << "Warning: Voltage source " << vs->getName()
-                             << " requires full MNA. Skipping its contribution." << endl;
-                    }
-                }
-
-                // Check for inductors.
-                Inductor* ind = dynamic_cast<Inductor*>(elem);
-                if(ind != nullptr) {
-                    // In DC, an inductor behaves as a short circuit.
-                    // For nodal analysis, a perfect short means zero resistance.
-                    // However, to keep the matrix finite, we approximate it by a very high conductance.
-                    const double G_short = 1e6;
-                    string nodeA = ind->getNode1()->getName();
-                    string nodeB = ind->getNode2()->getName();
-                    if(nodeA != groundName && nodeB != groundName) {
-                        int i = nodeIndex[nodeA];
-                        int j = nodeIndex[nodeB];
-                        A[i][i] += G_short;
-                        A[j][j] += G_short;
-                        A[i][j] -= G_short;
-                        A[j][i] -= G_short;
-                    } else if(nodeA == groundName && nodeB != groundName) {
-                        int j = nodeIndex[nodeB];
-                        A[j][j] += G_short;
-                    } else if(nodeB == groundName && nodeA != groundName) {
-                        int i = nodeIndex[nodeA];
-                        A[i][i] += G_short;
-                    }
-                }
-            }
-
-            // Solve A*x = b using Gaussian elimination.
-            vector<double> voltages = gaussianElimination(A, b);
-
-            cout << "\nNodal Voltages (with ground node " << groundName << " = 0 V):\n";
-            for (auto &p : nodeIndex) {
-                cout << p.first << " = " << voltages[p.second] << " V" << endl;
-            }
-        }
-    }
-
 };
 
-//--------------------- parse commands ---------------------
+Circuit circuit;
+int menuLevel = 0;
+
+
+
+void loadNewFile(const string &filePath) {
+    ofstream infile(filePath, ios::app);
+    if (!infile) {
+        cout << "Error: Could not open file: " << filePath << endl;
+        return;
+    }
+
+    bool exists = false;
+    ifstream schList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
+
+    string line;
+    while (getline(schList, line)) {
+        if (line == filePath) {
+            exists = true;
+            break;
+        }
+    }
+    schList.close();
+
+    infile.close();
+    if (!exists) {
+        ofstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt", ios::app);
+        schematicsList << filePath << endl;
+        schematicsList.close();
+    }
+
+    cout << "Schematic loaded: " << extractFileName(filePath) << endl;
+}
+
+void showSchematicsMenu() {
+    gSchematics.clear();
+    ifstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
+    string schematicPath;
+    while(getline(schematicsList, schematicPath)) {
+        ifstream infile(schematicPath);
+        if (infile.is_open()) {
+            Schematic sch;
+            sch.name = extractFileName(schematicPath);
+            sch.schematichPath = schematicPath;
+            string line;
+            while(getline(infile, line)) {
+                // (Optionally: skip empty lines or comments)
+                if (!line.empty())
+                    sch.lines.push_back(line);
+            }
+            infile.close();
+            gSchematics.push_back(sch);
+        }
+    }
+    schematicsList.close();
+
+    if(gSchematics.empty()) {
+        cout << "No schematics available." << endl;
+        return;
+    }
+    cout << "\nChoose existing schematic:" << endl;
+    for (size_t i = 0; i < gSchematics.size(); i++) {
+        cout << (i+1) << "- " << gSchematics[i].name << endl;
+    }
+    menuLevel = 1;
+    cout << "Enter the schematic number (or type 'return' to go back):" << endl;
+}
+
+//================ Command Parsing Functions ====================
+// Returns a vector of tokens; the first token identifies the command.
 vector<string> parseCommandLine(const string &cmd) {
     vector<string> tokens;
     smatch match;
-    if (regex_match(cmd, match, regex(R"(add\s+R([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-        tokens.push_back("addR");
-        tokens.push_back(match[1].str());
-        tokens.push_back(match[2].str());
-        tokens.push_back(match[3].str());
-        tokens.push_back(match[4].str());
-        return tokens;
+
+//    cout << menuLevel << endl;
+
+    if (menuLevel == 0 ) {
+
+        // NewFile command: "NewFile <file_path>"
+        if (regex_match(cmd, match, regex(R"(NewFile\s+([^ ]+))"))) {
+            tokens.push_back("NewFile");
+            tokens.push_back(match[1].str());
+            return tokens;
+        }
+        // show existing schematics: exactly "-show existing schematics"
+        if (regex_match(cmd, match, regex(R"(^-show\s+existing\s+schematics$)"))) {
+            tokens.push_back("showSchematics");
+            return tokens;
+        }
+
     }
-    if (regex_match(cmd, match, regex(R"(delete\s+R([^ ]+))"))) {
-        tokens.push_back("deleteR");
-        tokens.push_back(match[1].str());
-        return tokens;
+
+    if (menuLevel == 1) {
+
+        // choose schematic: "chooseSchematic <number>"
+        if (regex_match(cmd, match, regex(R"(([^ ]+))"))) {
+            tokens.push_back("chooseSchematic");
+            tokens.push_back(match[1].str());
+            return tokens;
+        }
+
     }
-    if (regex_match(cmd, match, regex(R"(add\s+C([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-        tokens.push_back("addC");
-        tokens.push_back(match[1].str());
-        tokens.push_back(match[2].str());
-        tokens.push_back(match[3].str());
-        tokens.push_back(match[4].str());
-        return tokens;
+
+    if (menuLevel == 2) {
+
+//        cout << "cmd: " << cmd << endl;
+        // exit existing schematics: exactly "-exit existing schematics"
+        if (regex_match(cmd, match, regex(R"(^-exit\s+existing\s+schematics$)"))) {
+            tokens.push_back("exitSchematics");
+            return tokens;
+        }
+        // save existing schematics: exactly "-save existing schematics"
+        if (regex_match(cmd, match, regex(R"(^-save\s+existing\s+schematics$)"))) {
+            tokens.push_back("saveSchematics");
+            return tokens;
+        }
+        // "return" command
+        if (regex_match(cmd, regex(R"(return)"))) {
+            tokens.push_back("return");
+            return tokens;
+        }
+        // add resistor: "add R<ID> <node1> <node2> <value>"
+        if (regex_match(cmd, match, regex(R"(add\s+R\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("addR");
+//            cout << "recivieng resistor" << endl;
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            return tokens;
+        }
+        // add capacitor: "add C<ID> <node1> <node2> <value>"
+        if (regex_match(cmd, match, regex(R"(add\s+C\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("addC");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            return tokens;
+        }
+        // add inductor: "add L<ID> <node1> <node2> <value>"
+        if (regex_match(cmd, match, regex(R"(add\s+L\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("addL");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            return tokens;
+        }
+        // add voltage source: "add VS<ID> <node1> <node2> <value>"
+        if (regex_match(cmd, match, regex(R"(add\s+VS\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("addVS");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            return tokens;
+        }
+        // add current source: "add CS<ID> <node1> <node2> <value>"
+        if (regex_match(cmd, match, regex(R"(add\s+CS\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("addCS");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            return tokens;
+        }
+        // Voltage Source with SIN(...) syntax
+        if (regex_match(cmd, match, regex(R"(add\s+V([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+SIN\(\s*([^ ]+)\s+([^ ]+)\s+([^ ]+)\s*\))"))) {
+            tokens.push_back("addVS_SIN");
+            for (int i = 1; i <= 6; ++i)
+                tokens.push_back(match[i].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(add\s+GND\s+([^ ]+))"))) {
+            tokens.push_back("addGND");
+            tokens.push_back(match[1].str()); // nodeName
+            return tokens;
+        }
+        // delete and list commands are similar...
+        if (regex_match(cmd, match, regex(R"(delete\s+R([^ ]+))"))) {
+            tokens.push_back("deleteR");
+            tokens.push_back(match[1].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(delete\s+C([^ ]+))"))) {
+            tokens.push_back("deleteC");
+            tokens.push_back(match[1].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(delete\s+L([^ ]+))"))) {
+            tokens.push_back("deleteL");
+            tokens.push_back(match[1].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(delete\s+VS([^ ]+))"))) {
+            tokens.push_back("deleteVS");
+            tokens.push_back(match[1].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(delete\s+CS([^ ]+))"))) {
+            tokens.push_back("deleteCS");
+            tokens.push_back(match[1].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(list\s+([A-Za-z]+))"))) {
+            tokens.push_back("list");
+            tokens.push_back(match[1].str());
+            return tokens;
+        }
+        if (regex_match(cmd, regex(R"(list)"))) {
+            tokens.push_back("list");
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(rename\s+node\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("rename");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            return tokens;
+        }
+        if (regex_match(cmd, regex(R"(\.nodes)"))) {
+            tokens.push_back(".nodes");
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(analyze)"))) {
+            tokens.push_back("analyze");
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(simulateRC\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("simulateRC");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            tokens.push_back(match[5].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(simulateAC\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("simulateAC");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            tokens.push_back(match[5].str());
+            tokens.push_back(match[6].str());
+            tokens.push_back(match[7].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(simulateRLC\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("simulateRLC");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            tokens.push_back(match[5].str());
+            tokens.push_back(match[6].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(simulateFFT\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("simulateFFT");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            tokens.push_back(match[5].str());
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(simulateSweep\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+            tokens.push_back("simulateSweep");
+            tokens.push_back(match[1].str());
+            tokens.push_back(match[2].str());
+            tokens.push_back(match[3].str());
+            tokens.push_back(match[4].str());
+            tokens.push_back(match[5].str());
+            tokens.push_back(match[6].str());
+            tokens.push_back(match[7].str());
+            return tokens;
+        }
+
     }
-    if (regex_match(cmd, match, regex(R"(add\s+L([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-        tokens.push_back("addL");
-        tokens.push_back(match[1].str());
-        tokens.push_back(match[2].str());
-        tokens.push_back(match[3].str());
-        tokens.push_back(match[4].str());
-        return tokens;
-    }
-    if (regex_match(cmd, match, regex(R"(add\s+V([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-        tokens.push_back("addV");
-        tokens.push_back(match[1].str());
-        tokens.push_back(match[2].str());
-        tokens.push_back(match[3].str());
-        tokens.push_back(match[4].str());
-        return tokens;
-    }
-    if (regex_match(cmd, match, regex(R"(add\s+I([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-        tokens.push_back("addI");
-        tokens.push_back(match[1].str());
-        tokens.push_back(match[2].str());
-        tokens.push_back(match[3].str());
-        tokens.push_back(match[4].str());
-        return tokens;
-    }
-    if (regex_match(cmd, match, regex(R"(add\s+GND\s+([^ ]+))"))) {
-        tokens.push_back("addGND");
-        tokens.push_back(match[1].str()); // nodeName
-        return tokens;
-    }
-    if (regex_match(cmd, match, regex(R"(list\s+([A-Za-z]+))"))) {
-        tokens.push_back("list");
-        tokens.push_back(match[1].str());
-        return tokens;
-    }
-    if (regex_match(cmd, regex(R"(list)"))) {
-        tokens.push_back("list");
-        return tokens;
-    }
-    if (regex_match(cmd, match, regex(R"(rename\s+node\s+([^ ]+)\s+([^ ]+))"))) {
-        tokens.push_back("rename");
-        tokens.push_back(match[1].str());
-        tokens.push_back(match[2].str());
-        return tokens;
-    }
-    if (regex_match(cmd, regex(R"(\.nodes)"))) {
-        tokens.push_back(".nodes");
-        return tokens;
-    }
-    if (regex_match(cmd, match, regex(R"(analyze\s+([^ ]+))"))) {
-        tokens.push_back("analyze");
-        tokens.push_back(match[1].str());
-        return tokens;
-    }
-    if (regex_match(cmd, match, regex(R"(TRAN\s+([^ ]+)\s+([^ ]+)\s*([^ ]*)\s*([^ ]*))"))) {
-        tokens.push_back("TRAN");
-        tokens.push_back(match[1].str());
-        tokens.push_back(match[2].str());
-        tokens.push_back(match[3].str());
-        tokens.push_back(match[4].str());
-        return tokens;
-    }
+
     return tokens;
 }
 
-// ------------------- Input Handler Function -------------------
+//================ Input Handler Function ====================
+
+void chooseSchematic(const string &numStr);
+void exitSchematic(Circuit &circuit);
+void saveSchematic(Circuit &circuit);
+
 void inputHandler(const string &input, Circuit &circuit) {
     vector<string> tokens = parseCommandLine(input);
     if (tokens.empty()) {
@@ -779,74 +851,262 @@ void inputHandler(const string &input, Circuit &circuit) {
         return;
     }
     string action = tokens[0];
-    if (action == "addR") {
-        string name = "R" + tokens[1];
+    if (action == "NewFile") {
+        string filePath = tokens[1];
+        loadNewFile(filePath);
+    }
+    else if (action == "showSchematics") {
+        showSchematicsMenu();
+    }
+    else if (action == "saveSchematics") {
+        saveSchematic(circuit);
+    }
+    else if (action == "exitSchematics") {
+        exitSchematic(circuit);
+    }
+    else if (action == "chooseSchematic") {
+        if (tokens.size() < 2) {
+            cout << "Error : Inappropriate input" << endl;
+        } else {
+            chooseSchematic(tokens[1]);
+        }
+    }
+    else if (action == "return") {
+        // Do nothing, simply return to main menu.
+    }
+    else if (action == "addR") {
+        string name = tokens[1];
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
         circuit.addElement(new Resistor(name, n1, n2, val));
-    } else if (action == "deleteR") {
-        string name = "R" + tokens[1];
-        circuit.deleteElement(name);
-    } else if (action == "addC") {
-        string name = "C" + tokens[1];
+    }
+    else if (action == "addC") {
+        string name = tokens[1];
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
         circuit.addElement(new Capacitor(name, n1, n2, val));
-    } else if (action == "addL") {
-        string name = "L" + tokens[1];
+    }
+    else if (action == "addL") {
+        string name = tokens[1];
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
         circuit.addElement(new Inductor(name, n1, n2, val));
-    } else if (action == "addV") {
-        string name = "V" + tokens[1];
+    }
+    else if (action == "addVS") {
+        string name = tokens[1];
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
         circuit.addElement(new VoltageSource(name, n1, n2, val));
-    } else if (action == "addI") {
-        string name = "I" + tokens[1];
+    }
+    else if (action == "addCS") {
+        string name = tokens[1];
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
         circuit.addElement(new CurrentSource(name, n1, n2, val));
-    } else if (action == "addGND") {
+    }
+    else if (action == "addGND") {
         if (tokens.size() >= 2) {
             circuit.setGroundNode(tokens[1]);
         } else {
             cout << "ERROR: Missing node name for GND command" << endl;
         }
-    } else if (action == "list") {
+    }
+    else if (action == "addVS_SIN") {
+        string name = "V" + tokens[1];
+        Node* n1 = circuit.getOrCreateNode(tokens[2]);
+        Node* n2 = circuit.getOrCreateNode(tokens[3]);
+        double offset = parseNumber(tokens[4]);
+        double amp = parseNumber(tokens[5]);
+        double freq = parseNumber(tokens[6]);
+
+        circuit.addElement(new VoltageSource(name, n1, n2, offset, amp, freq));
+    }
+    else if (action == "deleteR") {
+        string name = tokens[1];
+        circuit.deleteElement(name);
+    }
+    else if (action == "deleteC") {
+        string name = tokens[1];
+        circuit.deleteElement(name);
+    }
+    else if (action == "deleteL") {
+        string name = tokens[1];
+        circuit.deleteElement(name);
+    }
+    else if (action == "deleteVS") {
+        string name = tokens[1];
+        circuit.deleteElement(name);
+    }
+    else if (action == "deleteCS") {
+        string name = tokens[1];
+        circuit.deleteElement(name);
+    }
+    else if (action == "list") {
         if (tokens.size() == 2)
             circuit.listElements(tokens[1]);
         else
             circuit.listElements();
-    } else if (action == "rename") {
+    }
+    else if (action == "rename") {
         if (tokens.size() >= 3)
             circuit.renameNode(tokens[1], tokens[2]);
-    } else if (action == ".nodes") {
+    }
+    else if (action == ".nodes") {
         circuit.listNodes();
-    } else if (action == "analyze") {
-        if (tokens.size() >= 2)
-            circuit.solveNodalAnalysis(tokens[1]);
-    } else if (action == "TRAN") {
-        if (tokens.size() >= 3) {
-            circuit.timeStep = parseNumber(tokens[1]);
-            circuit.tStop = parseNumber(tokens[2]);
-            circuit.tStart = tokens.size() > 3 && !tokens[3].empty() ? parseNumber(tokens[3]) : 0.0;
-            circuit.tMaxStep = tokens.size() > 4 && !tokens[4].empty() ? parseNumber(tokens[4]) : circuit.timeStep;
-            circuit.totalSteps = static_cast<int>((circuit.tStop - circuit.tStart) / circuit.timeStep);
-            circuit.solveTransientAnalysis();
-        } else {
-            cout << "ERROR: Insufficient parameters for TRAN command" << endl;
-        }
-    } else {
+    }
+    else if (action == "analyze") {
+//        if (tokens.size() >= 2)
+        cout << circuit.groundName << endl;
+            circuit.solveNodalAnalysis();
+    }
+    else if (action == "simulateRC") {
+        double R = parseNumber(tokens[1]);
+        double C = parseNumber(tokens[2]);
+        double Vin = parseNumber(tokens[3]);
+        double dt = parseNumber(tokens[4]);
+        double totalTime = parseNumber(tokens[5]);
+        circuit.simulateRC(R, C, Vin, dt, totalTime);
+    }
+    else if (action == "simulateAC") {
+        double R = parseNumber(tokens[1]);
+        double L = parseNumber(tokens[2]);
+        double C = parseNumber(tokens[3]);
+        double Vin = parseNumber(tokens[4]);
+        double startFreq = parseNumber(tokens[5]);
+        double endFreq = parseNumber(tokens[6]);
+        double stepFreq = parseNumber(tokens[7]);
+        circuit.simulateAC(R, L, C, Vin, startFreq, endFreq, stepFreq);
+    }
+    else if (action == "simulateRLC") {
+        double R = parseNumber(tokens[1]);
+        double L = parseNumber(tokens[2]);
+        double C = parseNumber(tokens[3]);
+        double Vin = parseNumber(tokens[4]);
+        double dt = parseNumber(tokens[5]);
+        double totalTime = parseNumber(tokens[6]);
+        circuit.simulateRLC(R, L, C, Vin, dt, totalTime);
+    }
+    else if (action == "simulateFFT") {
+        double R = parseNumber(tokens[1]);
+        double C = parseNumber(tokens[2]);
+        double Vin = parseNumber(tokens[3]);
+        double dt = parseNumber(tokens[4]);
+        double totalTime = parseNumber(tokens[5]);
+        circuit.simulateFFT(R, C, Vin, dt, totalTime);
+    }
+    else if (action == "simulateSweep") {
+        double startR = parseNumber(tokens[1]);
+        double endR = parseNumber(tokens[2]);
+        double stepR = parseNumber(tokens[3]);
+        double C = parseNumber(tokens[4]);
+        double Vin = parseNumber(tokens[5]);
+        double dt = parseNumber(tokens[6]);
+        double totalTime = parseNumber(tokens[7]);
+        circuit.simulateSweep(startR, endR, stepR, C, Vin, dt, totalTime);
+    }
+    else {
         cout << "ERROR: Unknown command action" << endl;
     }
 }
 
+
+void chooseSchematic(const string &numStr) {
+    int choice = 0;
+    try {
+        choice = stoi(numStr);
+    } catch (...) {
+        cout << "Error : Inappropriate input" << endl;
+        return;
+    }
+    if(choice < 1 || choice > static_cast<int>(gSchematics.size())) {
+        cout << "Error : Inappropriate input" << endl;
+        return;
+    }
+    // Display the chosen schematic's content.
+    menuLevel = 2;
+    Schematic sch = gSchematics[choice - 1];
+    cout << "\nSchematic (" << sch.name << ") content:" << endl;
+    for (const auto &line : sch.lines) {
+        cout << line << endl;
+    }
+
+    cout << sch.lines.size() << endl;
+    for (const auto &line : sch.lines) {
+        string line2 = "add " + line;
+        inputHandler(line2, circuit);
+
+//        if (line2.substr(3, 3) == "GND") {
+//            line2 = "add GND " + line2.substr(8);
+//            inputHandler(line2, circuit);
+//        }
+    }
+
+//    if (circuit.getGroundNodes() != "") {
+//        string line2 = "add GND " + circuit.getGroundNodes();
+//        inputHandler(line2, circuit);
+//    }
+        circuit.schematicPath = sch.schematichPath;
+
+}
+
+void saveSchematic(Circuit &circuit) {
+    vector<string> newLines;
+    for (auto element : circuit.elements) {
+        string newLine = "";
+
+        if (element->getType() == "Resistor") {
+            newLine = "R ";
+        } else if (element->getType() == "Capacitor") {
+            newLine = "C ";
+
+        } else if (element->getType() == "Inductor") {
+            newLine = "L ";
+
+        } else if (element->getType() == "VoltageSource") {
+            newLine = "VS ";
+
+        } else if (element->getType() == "CurrentSource") {
+            newLine = "CS ";
+        }
+
+        newLine = newLine + element->getName() + " " + element->getNode1()->getName() + " " + element->getNode2()->getName()
+                    + " " + to_string(element->getValue());
+
+        newLines.push_back(newLine);
+    }
+
+    if (circuit.getGroundNodes() != "") {
+        string newLine = "GND " + circuit.getGroundNodes();
+        newLines.push_back(newLine);
+    }
+
+    ofstream outFile(circuit.schematicPath);
+    if (!outFile) {
+        cerr << "Schematic has been removed or transformed." << endl;
+    } else {
+        for (const auto& item : newLines) {
+            outFile << item << std::endl;
+        }
+    }
+    outFile.close();
+    exitSchematic(circuit);
+
+    cout << "Enter a new file or choose an old one." << endl;
+}
+
+
+void exitSchematic(Circuit &circuit) {
+    circuit.reset();
+    menuLevel = 0;
+}
+
+
+//================ Process Input Loop ========================
 void processInput(Circuit &circuit) {
     string input;
     cout << "Enter command (or 'exit' to quit):" << endl;
@@ -862,14 +1122,8 @@ void processInput(Circuit &circuit) {
     }
 }
 
+//================ Main Function =============================
 int main() {
-    try {
-        Circuit circuit;
-//        testRCCircuit(circuit);
-         processInput(circuit);
-    }
-    catch (const exception &e) {
-        cout << "Unexpected exception: " << e.what() << endl;
-    }
+    processInput(circuit);
     return 0;
 }
