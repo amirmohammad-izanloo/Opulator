@@ -222,6 +222,8 @@ public:
     vector<Element*> elements;
 //    set<string> groundNodes;
     string groundName;
+    double timeStep = 0.001;
+    int totalSteps = 1000;
 
     string schematicPath = "";
 
@@ -300,6 +302,13 @@ public:
     }
 
     //------------------ Steady-State Nodal Analysis ------------------
+
+    void setTransientParams(double dt, int steps) {
+        if (dt <= 0 || steps <= 0) throw InvalidValueException();
+        timeStep = dt;
+        totalSteps = steps;
+    }
+
     void solveNodalAnalysis() {
         bool foundGround = false;
         for (auto node : nodes) {
@@ -402,6 +411,142 @@ public:
         }
     }
 
+    void simulateTransient() {
+        // بررسی وجود گره زمین
+        bool foundGround = false;
+        for (auto node : nodes) {
+            if (node->getName() == groundName)
+                foundGround = true;
+        }
+        if (!foundGround) throw NoGroundException();
+
+        // گره‌های ناشناخته (به جز ground)
+        vector<Node*> unknownNodes;
+        for (auto node : nodes) {
+            if (node->getName() != groundName)
+                unknownNodes.push_back(node);
+        }
+
+        int n = unknownNodes.size();
+        if (n == 0) {
+            cout << "No unknown nodes.\n";
+            return;
+        }
+
+        // نگاشت گره به اندیس ماتریس
+        map<string, int> nodeIndex;
+        for (int i = 0; i < n; ++i)
+            nodeIndex[unknownNodes[i]->getName()] = i;
+
+        // ولتاژهای قبلی برای خازن‌ها
+        map<string, double> prevVoltages;
+        for (auto node : unknownNodes)
+            prevVoltages[node->getName()] = 0.0;
+
+        cout << "--- Transient Simulation Start ---\n";
+
+        for (int step = 0; step < totalSteps; ++step) {
+            double time = step * timeStep;
+
+            // ساخت ماتریس A و بردار b
+            vector<vector<double>> A(n, vector<double>(n, 0.0));
+            vector<double> b(n, 0.0);
+
+            for (auto elem : elements) {
+                string na = elem->getNode1()->getName();
+                string nb = elem->getNode2()->getName();
+                int i = (na != groundName) ? nodeIndex[na] : -1;
+                int j = (nb != groundName) ? nodeIndex[nb] : -1;
+
+                // مقاومت
+                if (elem->getType() == "Resistor") {
+                    double g = 1.0 / elem->getValue();
+                    if (i != -1) A[i][i] += g;
+                    if (j != -1) A[j][j] += g;
+                    if (i != -1 && j != -1) {
+                        A[i][j] -= g;
+                        A[j][i] -= g;
+                    }
+                }
+
+                    // منبع جریان
+                else if (elem->getType() == "CS") {
+                    double I = elem->getValue();
+                    if (i != -1) b[i] += I;
+                    if (j != -1) b[j] -= I;
+                }
+
+                    // خازن (با روش اویلر معکوس)
+                else if (elem->getType() == "Capacitor") {
+                    double C = elem->getValue();
+                    double G = C / timeStep;
+                    double v_prev_a = (i != -1) ? prevVoltages[na] : 0.0;
+                    double v_prev_b = (j != -1) ? prevVoltages[nb] : 0.0;
+                    double Ieq = G * (v_prev_a - v_prev_b);
+
+                    if (i != -1) {
+                        A[i][i] += G;
+                        b[i] += Ieq;
+                    }
+                    if (j != -1) {
+                        A[j][j] += G;
+                        b[j] -= Ieq;
+                    }
+                    if (i != -1 && j != -1) {
+                        A[i][j] -= G;
+                        A[j][i] -= G;
+                    }
+                }
+
+                    // سلف ≈ اتصال کوتاه
+                else if (elem->getType() == "Inductor") {
+                    double G_short = 1e6;
+                    if (i != -1) A[i][i] += G_short;
+                    if (j != -1) A[j][j] += G_short;
+                    if (i != -1 && j != -1) {
+                        A[i][j] -= G_short;
+                        A[j][i] -= G_short;
+                    }
+                }
+
+                    // منبع ولتاژ DC یا سینوسی
+                else if (elem->getType() == "VS") {
+                    VoltageSource* vs = dynamic_cast<VoltageSource*>(elem);
+                    if (!vs) continue;
+                    double V = vs->getValue(); // پیش‌فرض DC
+                    if (vs->isSine)
+                        V = V + vs->amplitude * sin(2 * M_PI * vs->frequency * time);
+
+                    const double G_big = 1e6;
+                    if (na == groundName && j != -1) {
+                        A[j][j] += G_big;
+                        b[j] -= V * G_big;
+                    } else if (nb == groundName && i != -1) {
+                        A[i][i] += G_big;
+                        b[i] += V * G_big;
+                    } else if (i != -1 && j != -1) {
+                        // بین دو گره غیر ground: فعلاً رد می‌کنیم
+                        cout << "⚠️  Skipping VS " << vs->getName() << " (not grounded)\n";
+                    }
+                }
+            }
+
+            // حل A.x = b
+            vector<double> x = gaussianElimination(A, b);
+
+            // چاپ خروجی
+            cout << "t=" << time << "s: ";
+            for (int k = 0; k < n; ++k) {
+                string name = unknownNodes[k]->getName();
+                double v = x[k];
+                prevVoltages[name] = v;
+                cout << name << "=" << v << "V  ";
+            }
+            cout << endl;
+        }
+
+        cout << "--- Transient Simulation Done ---\n";
+    }
 
 
     //------------------ Transient RC Simulation ------------------
@@ -722,8 +867,9 @@ vector<string> parseCommandLine(const string &cmd) {
             return tokens;
         }
         // Voltage Source with SIN(...) syntax
-        if (regex_match(cmd, match, regex(R"(add\s+V([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+SIN\(\s*([^ ]+)\s+([^ ]+)\s+([^ ]+)\s*\))"))) {
+        if (regex_match(cmd, match, regex(R"(add\s+V\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+SIN\(\s*([^ ]+)\s+([^ ]+)\s+([^ ]+)\s*\))"))) {
             tokens.push_back("addVS_SIN");
+            cout << "sinnnnnnnnnnn" << endl;
             for (int i = 1; i <= 6; ++i)
                 tokens.push_back(match[i].str());
             return tokens;
@@ -780,6 +926,16 @@ vector<string> parseCommandLine(const string &cmd) {
         }
         if (regex_match(cmd, match, regex(R"(analyze)"))) {
             tokens.push_back("analyze");
+            return tokens;
+        }
+        if (regex_match(cmd, match, regex(R"(\.step\s+([0-9eE\.\-]+)\s+(\d+))"))) {
+            tokens.push_back(".step");
+            tokens.push_back(match[1].str());  // dt
+            tokens.push_back(match[2].str());  // number of steps
+            return tokens;
+        }
+        if (regex_match(cmd, regex(R"(transient)"))) {
+            tokens.push_back("transient");
             return tokens;
         }
         if (regex_match(cmd, match, regex(R"(simulateRC\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
@@ -917,15 +1073,22 @@ void inputHandler(const string &input, Circuit &circuit) {
         }
     }
     else if (action == "addVS_SIN") {
-        string name = "V" + tokens[1];
+        // قالب: add V<name> <node+> <node-> SIN(<offset> <amplitude> <frequency>)
+        string name = tokens[1];  // چون دستور فقط "V1" داره
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double offset = parseNumber(tokens[4]);
         double amp = parseNumber(tokens[5]);
         double freq = parseNumber(tokens[6]);
-
         circuit.addElement(new VoltageSource(name, n1, n2, offset, amp, freq));
     }
+    else if (action == "transient") {
+        if (circuit.getGroundNodes() != "")
+            circuit.simulateTransient(); // tokens[1] = ground node name
+        else
+            cout << "ERROR: Missing ground node in 'transient' command.\n";
+    }
+
     else if (action == "deleteR") {
         string name = tokens[1];
         circuit.deleteElement(name);
@@ -963,6 +1126,14 @@ void inputHandler(const string &input, Circuit &circuit) {
 //        if (tokens.size() >= 2)
         cout << circuit.groundName << endl;
             circuit.solveNodalAnalysis();
+    }
+    else if (action == ".step") {
+        if (tokens.size() >= 3) {
+            double dt = parseNumber(tokens[1]);
+            int steps = stoi(tokens[2]);
+            circuit.setTransientParams(dt, steps);
+            cout << "Time step = " << dt << " s, total steps = " << steps << endl;
+        }
     }
     else if (action == "simulateRC") {
         double R = parseNumber(tokens[1]);
