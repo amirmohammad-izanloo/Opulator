@@ -1,14 +1,4 @@
 #include <bits/stdc++.h>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <vector>
-#include <regex>
-#include <map>
-#include <exception>
-#include <cstdlib>
-#include <cmath>
-#include <complex>
 
 using namespace std;
 
@@ -34,17 +24,10 @@ public:
     }
 };
 
-class DependentSourceException : public exception {
+class DuplicateGroundNodeException : public exception {
 public:
     const char* what() const noexcept override {
-        return "Error: Dependent source has an undefined control element.";
-    }
-};
-
-class MissingParameterException : public exception {
-public:
-    const char* what() const noexcept override {
-        return "Error: Missing parameters for time-dependent source.";
+        return "Error: Duplicate Ground Added.";
     }
 };
 
@@ -62,12 +45,20 @@ double parseNumber(string input) {
     char last = input[input.length() - 1];
     string numberPart;
 
-    if (last == 'k' || last == 'K') {
+    if (last == 'M') {
+        numberPart = input.substr(0, input.length() - 1);
+        result = stod(numberPart) * 1000000; // Mega = 10^6
+    } else if (last == 'n') {
+        numberPart = input.substr(0, input.length() - 1);
+        result = stod(numberPart) / 1000000000; // nano = 10^-9
+    } else if (last == 'k' || last == 'K') {
         numberPart = input.substr(0, input.length() - 1);
         result = stod(numberPart) * 1000;
-    } else if (last == 'm' || last == 'M') {
+    } else if (last == 'm') {
         numberPart = input.substr(0, input.length() - 1);
         result = stod(numberPart) / 1000;
+    } else if (input.find('e') != string::npos) {
+        result = stod(input); // Handle scientific notation
     } else if (last == 'u' || last == 'U') {
         numberPart = input.substr(0, input.length() - 1);
         result = stod(numberPart) / 1000000;
@@ -86,7 +77,6 @@ struct Schematic {
 
 vector<Schematic> gSchematics;
 
-//================ File Menu Functions ==========================
 // Extracts a file name from a given file path
 string extractFileName(const string &filePath) {
     size_t pos = filePath.find_last_of("/\\");
@@ -96,8 +86,8 @@ string extractFileName(const string &filePath) {
         return filePath;
 }
 
-
 //================ Gaussian Elimination Function =================
+
 vector<double> gaussianElimination(vector<vector<double>> A, vector<double> b) {
     int n = A.size();
     for (int i = 0; i < n; i++) {
@@ -133,7 +123,9 @@ vector<double> gaussianElimination(vector<vector<double>> A, vector<double> b) {
     }
     return x;
 }
+
 //================ Circuit Classes (Nodes/Elements) ==============
+
 class Node {
     string name;
 public:
@@ -231,8 +223,7 @@ class Circuit {
 public:
     vector<Node*> nodes;
     vector<Element*> elements;
-//    set<string> groundNodes;
-    string groundName;
+    string groundName = "";
     double timeStep = 0.001;
     int totalSteps = 1000;
 
@@ -312,7 +303,7 @@ public:
             cout << node->getName() << endl;
     }
 
-    //------------------ Steady-State Nodal Analysis ------------------
+    //------------------ Analyze ------------------
 
     void setTransientParams(double dt, int steps) {
         if (dt <= 0 || steps <= 0) throw InvalidValueException();
@@ -427,7 +418,7 @@ public:
             cout << p.first << " = " << voltages[p.second] << " V" << endl;
     }
 
-       void simulateTransient() {
+    void simulateTransient() {
         bool foundGround = false;
         for (auto node : nodes)
             if (node->getName() == groundName) { foundGround = true; break; }
@@ -532,7 +523,7 @@ public:
                         A[i][i] += G_big;
                         b[i] += V * G_big;
                     } else if (i != -1 && j != -1) {
-                        cout << "⚠️  Skipping VS " << vs->getName() << " (not grounded)" << endl;
+                        cout << "Skipping VS " << vs->getName() << " (not grounded)" << endl;
                     }
                 }
             }
@@ -566,114 +557,189 @@ public:
         cout << "--- Transient Simulation Done ---" << endl;
     }
 
+    void simulateTransientWithCurrents() {
+        bool foundGround = false;
+        for (auto node : nodes)
+            if (node->getName() == groundName) { foundGround = true; break; }
+        if (!foundGround)
+            throw NoGroundException();
 
+        vector<Node*> unknownNodes;
+        for (auto node : nodes)
+            if (node->getName() != groundName)
+                unknownNodes.push_back(node);
 
-    //------------------ Transient RC Simulation ------------------
-    void simulateRC(double R, double C, double Vin, double dt, double totalTime) {
-        if (R <= 0 || C <= 0) {
-            cout << "Error: Negative or zero value for a component is invalid." << endl;
+        int n = unknownNodes.size();
+        if (n == 0) {
+            cout << "No unknown nodes." << endl;
             return;
         }
-        double Vc = 0.0;
-        int steps = (totalTime / dt);
-        cout << "\nSimulating RC Circuit:" << endl;
-        cout << "Time(s) | Vc(V)" << endl;
-        cout << "-------------------" << endl;
-        for (int i = 0; i <= steps; i+=10) {
-            double time = i * dt;
-            cout << time << " | " << Vc << endl;
-            Vc = Vc + dt * ((Vin - Vc) / (R * C));
-        }
-    }
 
-    //------------------ AC Analysis Simulation ------------------
-    void simulateAC(double R, double L, double C, double Vin, double startFreq, double endFreq, double stepFreq) {
-        complex<double> j(0.0, 1.0);
-        cout << "\nAC Analysis Simulation (Series RLC):" << endl;
-        cout << "Freq(Hz) | Vout(V) | Phase(deg)" << endl;
-        cout << "---------------------------------" << endl;
-        for (double f = startFreq; f <= endFreq; f += 10*stepFreq) {
-            double omega = 2 * M_PI * f;
-            complex<double> Z_R(R, 0.0);
-            complex<double> Z_L = j * omega * L;
-            complex<double> Z_C = 1.0 / (j * omega * C);
-            complex<double> Z_total = Z_R + Z_L + Z_C;
-            double Vout = Vin * abs(Z_C) / abs(Z_total);
-            double phase = arg(Z_C / Z_total) * 180.0 / M_PI;
-            cout << f << " | " << Vout << " | " << phase << endl;
-        }
-    }
-    //------------------ Transient RLC Simulation ------------------
-    void simulateRLC(double R, double L, double C, double Vin, double dt, double totalTime) {
-        if (R <= 0 || L <= 0 || C <= 0) {
-            cout << "Error: Negative or zero value for a component is invalid." << endl;
-            return;
-        }
-        double x1 = 0.0, x2 = 0.0;
-        int steps = totalTime / dt;
-        cout << "\nSimulating RLC Circuit:" << endl;
-        cout << "Time(s) | Vc(V) | dVc/dt (V/s)" << endl;
-        cout << "---------------------------------" << endl;
-        for (int i = 0; i <= steps/10; i++) {
-            double time = i * dt;
-            cout << time << " | " << x1 << " | " << x2 << endl;
-            double x1_next = x1 + dt * x2;
-            double x2_next = x2 + dt * ((Vin - x1 - R * C * x2) / (L * C));
-            x1 = x1_next;
-            x2 = x2_next;
-        }
-    }
+        map<string, int> nodeIndex;
+        for (int i = 0; i < n; ++i)
+            nodeIndex[unknownNodes[i]->getName()] = i;
 
-    //------------------ Part 16: Transient FFT Analysis ------------------
-    // Simulate an RC circuit transient response and calculate its DFT.
-    void simulateFFT(double R, double C, double Vin, double dt, double totalTime) {
-        if (R <= 0 || C <= 0) {
-            cout << "Error: Negative or zero value for a component is invalid." << endl;
-            return;
-        }
-        int steps = totalTime / dt;
-        vector<double> signal;
-        double Vc = 0.0;
-        for (int i = 0; i <= steps; i++) {
-            signal.push_back(Vc);
-            Vc = Vc + dt * ((Vin - Vc) / (R * C));
-        }
-        int N = signal.size();
-        vector<complex<double>> spectrum(N);
-        for (int k = 0; k < N; k++) {
-            complex<double> sum(0.0, 0.0);
-            for (int n = 0; n < N; n++) {
-                double angle = -2 * M_PI * k * n / N;
-                sum += signal[n] * complex<double>(cos(angle), sin(angle));
+        map<string, double> prevVoltages;
+        for (auto node : unknownNodes)
+            prevVoltages[node->getName()] = 0.0;
+
+        static map<string, double> inductorCurrents;
+
+        cout << "--- Transient Simulation with Currents ---" << endl;
+
+        for (int step = 0; step < totalSteps; ++step) {
+            double time = step * timeStep;
+            vector<vector<double>> A(n, vector<double>(n, 0.0));
+            vector<double> b(n, 0.0);
+
+            for (auto elem : elements) {
+                string na = elem->getNode1()->getName();
+                string nb = elem->getNode2()->getName();
+                int i = (na != groundName) ? nodeIndex[na] : -1;
+                int j = (nb != groundName) ? nodeIndex[nb] : -1;
+
+                if (elem->getType() == "Resistor") {
+                    double g = 1.0 / elem->getValue();
+                    if (i != -1) A[i][i] += g;
+                    if (j != -1) A[j][j] += g;
+                    if (i != -1 && j != -1) {
+                        A[i][j] -= g;
+                        A[j][i] -= g;
+                    }
+                } else if (elem->getType() == "CurrentSource") {
+                    double I = elem->getValue();
+                    if (i != -1) b[i] += I;
+                    if (j != -1) b[j] -= I;
+                } else if (elem->getType() == "Capacitor") {
+                    double C = elem->getValue();
+                    double G = C / timeStep;
+                    double v_prev_a = (i != -1) ? prevVoltages[na] : 0.0;
+                    double v_prev_b = (j != -1) ? prevVoltages[nb] : 0.0;
+                    double Ieq = G * (v_prev_a - v_prev_b);
+
+                    if (i != -1) {
+                        A[i][i] += G;
+                        b[i] += Ieq;
+                    }
+                    if (j != -1) {
+                        A[j][j] += G;
+                        b[j] -= Ieq;
+                    }
+                    if (i != -1 && j != -1) {
+                        A[i][j] -= G;
+                        A[j][i] -= G;
+                    }
+                } else if (elem->getType() == "Inductor") {
+                    double L = elem->getValue();
+                    double G_ind = timeStep / L;
+                    string indName = elem->getName();
+                    if (inductorCurrents.find(indName) == inductorCurrents.end())
+                        inductorCurrents[indName] = 0.0;
+                    double I_prev = inductorCurrents[indName];
+
+                    if (i != -1) {
+                        A[i][i] += G_ind;
+                        b[i] -= I_prev;
+                    }
+                    if (j != -1) {
+                        A[j][j] += G_ind;
+                        b[j] += I_prev;
+                    }
+                    if (i != -1 && j != -1) {
+                        A[i][j] -= G_ind;
+                        A[j][i] -= G_ind;
+                    }
+                } else if (elem->getType() == "VoltageSource") {
+                    VoltageSource* vs = dynamic_cast<VoltageSource*>(elem);
+                    if (!vs) continue;
+                    double V = vs->getValue();
+                    if (vs->isSine)
+                        V += vs->amplitude * sin(2 * M_PI * vs->frequency * time);
+                    const double G_big = 1e6;
+                    if (na == groundName && j != -1) {
+                        A[j][j] += G_big;
+                        b[j] -= V * G_big;
+                    } else if (nb == groundName && i != -1) {
+                        A[i][i] += G_big;
+                        b[i] += V * G_big;
+                    } else if (i != -1 && j != -1) {
+                        A[i][i] += G_big;
+                        A[j][j] += G_big;
+                        A[i][j] -= G_big;
+                        A[j][i] -= G_big;
+                        b[i] += V * G_big;
+                        b[j] -= V * G_big;
+                    }
+                }
             }
-            spectrum[k] = sum;
-        }
-        cout << "\nFFT of the RC transient response:" << endl;
-        cout << "Freq(Hz) | Magnitude | Phase(deg)" << endl;
-        for (int k = 0; k < N/2; k++) {
-            double freq = k / (N * dt);
-            double mag = abs(spectrum[k]);
-            double phase = arg(spectrum[k]) * 180.0 / M_PI;
-            cout << freq << " | " << mag << " | " << phase << endl;
-        }
-    }
 
-    // Helper for DFT computation.
-    vector<complex<double>> computeDFT(const vector<double>& signal) {
-        int N = signal.size();
-        vector<complex<double>> X(N);
-        for (int k = 0; k < N; k++) {
-            complex<double> sum(0.0, 0.0);
-            for (int n = 0; n < N; n++) {
-                double angle = -2 * M_PI * k * n / N;
-                sum += signal[n] * complex<double>(cos(angle), sin(angle));
+            vector<double> x = gaussianElimination(A, b);
+
+            // به‌روزرسانی جریان سلف‌ها
+            for (auto elem : elements) {
+                if (elem->getType() == "Inductor") {
+                    string na = elem->getNode1()->getName();
+                    string nb = elem->getNode2()->getName();
+                    int i = (na != groundName) ? nodeIndex[na] : -1;
+                    int j = (nb != groundName) ? nodeIndex[nb] : -1;
+                    double V_ind = 0.0;
+                    if (i != -1) V_ind += x[i];
+                    if (j != -1) V_ind -= x[j];
+                    double G_ind = timeStep / elem->getValue();
+                    string indName = elem->getName();
+                    inductorCurrents[indName] += G_ind * V_ind;
+                }
             }
-            X[k] = sum;
+
+            // ذخیره ولتاژها برای گام بعدی
+            map<string, double> newVoltages;
+            for (int k = 0; k < n; ++k) {
+                newVoltages[unknownNodes[k]->getName()] = x[k];
+            }
+
+            cout << fixed << setprecision(6);
+            cout << "t = " << time << " s:\n";
+
+            for (int k = 0; k < n; ++k) {
+                string nodeName = unknownNodes[k]->getName();
+                cout << "  V(" << nodeName << ") = " << x[k] << " V\n";
+            }
+
+            for (auto elem : elements) {
+                string na = elem->getNode1()->getName();
+                string nb = elem->getNode2()->getName();
+                double v_a = (na != groundName) ? newVoltages[na] : 0.0;
+                double v_b = (nb != groundName) ? newVoltages[nb] : 0.0;
+                double v_prev_a = (prevVoltages.count(na) ? prevVoltages[na] : 0.0);
+                double v_prev_b = (prevVoltages.count(nb) ? prevVoltages[nb] : 0.0);
+                double current = 0.0;
+
+                if (elem->getType() == "Resistor") {
+                    current = (v_a - v_b) / elem->getValue();
+                } else if (elem->getType() == "Capacitor") {
+                    double C = elem->getValue();
+                    double dv = (v_a - v_b) - (v_prev_a - v_prev_b);
+                    current = C * dv / timeStep;
+                } else if (elem->getType() == "Inductor") {
+                    current = inductorCurrents[elem->getName()];
+                } else if (elem->getType() == "CurrentSource") {
+                    current = elem->getValue();
+                } else if (elem->getType() == "VoltageSource") {
+                    current = NAN; // یا صرفاً چاپ نکنیم
+                }
+
+                if (!isnan(current))
+                    cout << "  I(" << elem->getName() << ") = " << current << " A\n";
+            }
+
+            cout << endl;
+            prevVoltages = newVoltages;
         }
-        return X;
+
+        cout << "--- Transient Simulation with Currents Done ---" << endl;
     }
 
-    // ------------------------- Ground --------a------------------------
+    // ------------------------- Ground ------------------------------
 
     void setGroundNode(const string& nodeName) {
         for (auto node : nodes) {
@@ -683,49 +749,21 @@ public:
                 return;
             }
         }
-        // اگر گره وجود ندارد، آن را ایجاد می‌کنیم
+
         Node* newNode = new Node(nodeName);
         nodes.push_back(newNode);
         groundName = nodeName;
         cout << "Ground node created and added: " << nodeName << endl;
     }
 
-    const string getGroundNodes() const {
+    const string getGroundName() const {
         return groundName;
     }
 
-    //------------------ Part 17: Parameter Sweep Simulation ------------------
-    // Sweep the resistor value for an RC circuit and estimate the time constant (τ) as the time when Vc first exceeds 63.2% of Vin.
-    void simulateSweep(double startR, double endR, double stepR, double C, double Vin, double dt, double totalTime) {
-        if (C <= 0 || Vin <= 0 || dt <= 0 || totalTime <= 0) {
-            cout << "Error: Invalid simulation parameters." << endl;
-            return;
-        }
-        cout << "\nParameter Sweep Simulation for RC Circuit:" << endl;
-        cout << "R(Ohm) | Estimated Tau (s)" << endl;
-        cout << "---------------------------" << endl;
-        for (double R = startR; R <= endR; R += stepR) {
-            double Vc = 0.0;
-            double tau = totalTime;
-            int steps = totalTime / dt;
-            bool found = false;
-            for (int i = 0; i <= steps; i++) {
-                double time = i * dt;
-                if (!found && Vc >= 0.632 * Vin) {
-                    tau = time;
-                    found = true;
-                }
-                Vc = Vc + dt * ((Vin - Vc) / (R * C));
-            }
-            cout << R << " | " << tau << endl;
-        }
-    }
 };
 
 Circuit circuit;
 int menuLevel = 0;
-
-
 
 void loadNewFile(const string &filePath) {
     ofstream infile(filePath, ios::app);
@@ -735,7 +773,7 @@ void loadNewFile(const string &filePath) {
     }
 
     bool exists = false;
-    ifstream schList("D:\\projects\\OOP_cLion\\Opulator\\test\\list\\w.txt");
+    ifstream schList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
 
     string line;
     while (getline(schList, line)) {
@@ -748,7 +786,7 @@ void loadNewFile(const string &filePath) {
 
     infile.close();
     if (!exists) {
-        ofstream schematicsList("D:\\projects\\OOP_cLion\\Opulator\\test\\list\\w.txt", ios::app);
+        ofstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt", ios::app);
         schematicsList << filePath << endl;
         schematicsList.close();
     }
@@ -758,7 +796,7 @@ void loadNewFile(const string &filePath) {
 
 void showSchematicsMenu() {
     gSchematics.clear();
-    ifstream schematicsList("D:\\projects\\OOP_cLion\\Opulator\\test\\list\\w.txt");
+    ifstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
     string schematicPath;
     while(getline(schematicsList, schematicPath)) {
         ifstream infile(schematicPath);
@@ -796,8 +834,6 @@ vector<string> parseCommandLine(const string &cmd) {
     vector<string> tokens;
     smatch match;
 
-//    cout << menuLevel << endl;
-
     if (menuLevel == 0 ) {
 
         // NewFile command: "NewFile <file_path>"
@@ -811,23 +847,19 @@ vector<string> parseCommandLine(const string &cmd) {
             tokens.push_back("showSchematics");
             return tokens;
         }
-
     }
 
     if (menuLevel == 1) {
-
-        // choose schematic: "chooseSchematic <number>"
+        // choose schematic: "<number>"
         if (regex_match(cmd, match, regex(R"(([^ ]+))"))) {
             tokens.push_back("chooseSchematic");
             tokens.push_back(match[1].str());
             return tokens;
         }
-
     }
 
     if (menuLevel == 2) {
 
-//        cout << "cmd: " << cmd << endl;
         // exit existing schematics: exactly "-exit existing schematics"
         if (regex_match(cmd, match, regex(R"(^-exit\s+existing\s+schematics$)"))) {
             tokens.push_back("exitSchematics");
@@ -843,7 +875,7 @@ vector<string> parseCommandLine(const string &cmd) {
             tokens.push_back("return");
             return tokens;
         }
-        // add resistor: "add R<ID> <node1> <node2> <value>"
+        // add resistor: "add R <Name> <node1> <node2> <value>"
         if (regex_match(cmd, match, regex(R"(add\s+R\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
             tokens.push_back("addR");
 //            cout << "recivieng resistor" << endl;
@@ -853,7 +885,7 @@ vector<string> parseCommandLine(const string &cmd) {
             tokens.push_back(match[4].str());
             return tokens;
         }
-        // add capacitor: "add C<ID> <node1> <node2> <value>"
+        // add capacitor: "add C <Name> <node1> <node2> <value>"
         if (regex_match(cmd, match, regex(R"(add\s+C\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
             tokens.push_back("addC");
             tokens.push_back(match[1].str());
@@ -862,7 +894,7 @@ vector<string> parseCommandLine(const string &cmd) {
             tokens.push_back(match[4].str());
             return tokens;
         }
-        // add inductor: "add L<ID> <node1> <node2> <value>"
+        // add inductor: "add L <Name> <node1> <node2> <value>"
         if (regex_match(cmd, match, regex(R"(add\s+L\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
             tokens.push_back("addL");
             tokens.push_back(match[1].str());
@@ -871,7 +903,7 @@ vector<string> parseCommandLine(const string &cmd) {
             tokens.push_back(match[4].str());
             return tokens;
         }
-        // add voltage source: "add VS<ID> <node1> <node2> <value>"
+        // add voltage source: "add VS <Name> <node1> <node2> <value>"
         if (regex_match(cmd, match, regex(R"(add\s+VS\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
             tokens.push_back("addVS");
             tokens.push_back(match[1].str());
@@ -880,7 +912,7 @@ vector<string> parseCommandLine(const string &cmd) {
             tokens.push_back(match[4].str());
             return tokens;
         }
-        // add current source: "add CS<ID> <node1> <node2> <value>"
+        // add current source: "add CS <Name> <node1> <node2> <value>"
         if (regex_match(cmd, match, regex(R"(add\s+CS\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
             tokens.push_back("addCS");
             tokens.push_back(match[1].str());
@@ -892,7 +924,6 @@ vector<string> parseCommandLine(const string &cmd) {
         // Voltage Source with SIN(...) syntax
         if (regex_match(cmd, match, regex(R"(add\s+V\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+SIN\(\s*([^ ]+)\s+([^ ]+)\s+([^ ]+)\s*\))"))) {
             tokens.push_back("addVS_SIN");
-            cout << "sinnnnnnnnnnn" << endl;
             for (int i = 1; i <= 6; ++i)
                 tokens.push_back(match[i].str());
             return tokens;
@@ -903,28 +934,8 @@ vector<string> parseCommandLine(const string &cmd) {
             return tokens;
         }
         // delete and list commands are similar...
-        if (regex_match(cmd, match, regex(R"(delete\s+R([^ ]+))"))) {
-            tokens.push_back("deleteR");
-            tokens.push_back(match[1].str());
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(delete\s+C([^ ]+))"))) {
-            tokens.push_back("deleteC");
-            tokens.push_back(match[1].str());
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(delete\s+L([^ ]+))"))) {
-            tokens.push_back("deleteL");
-            tokens.push_back(match[1].str());
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(delete\s+VS([^ ]+))"))) {
-            tokens.push_back("deleteVS");
-            tokens.push_back(match[1].str());
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(delete\s+CS([^ ]+))"))) {
-            tokens.push_back("deleteCS");
+        if (regex_match(cmd, match, regex(R"(delete\s+([^ ]+))"))) {
+            tokens.push_back("delete");
             tokens.push_back(match[1].str());
             return tokens;
         }
@@ -961,57 +972,10 @@ vector<string> parseCommandLine(const string &cmd) {
             tokens.push_back("transient");
             return tokens;
         }
-        if (regex_match(cmd, match, regex(R"(simulateRC\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("simulateRC");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            tokens.push_back(match[5].str());
+        if (regex_match(cmd, regex(R"(transient_currents)"))) {
+            tokens.push_back("transient_currents");
             return tokens;
         }
-        if (regex_match(cmd, match, regex(R"(simulateAC\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("simulateAC");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            tokens.push_back(match[5].str());
-            tokens.push_back(match[6].str());
-            tokens.push_back(match[7].str());
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(simulateRLC\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("simulateRLC");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            tokens.push_back(match[5].str());
-            tokens.push_back(match[6].str());
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(simulateFFT\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("simulateFFT");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            tokens.push_back(match[5].str());
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(simulateSweep\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("simulateSweep");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            tokens.push_back(match[5].str());
-            tokens.push_back(match[6].str());
-            tokens.push_back(match[7].str());
-            return tokens;
-        }
-
     }
 
     return tokens;
@@ -1055,13 +1019,36 @@ void inputHandler(const string &input, Circuit &circuit) {
     }
     else if (action == "addR") {
         string name = tokens[1];
+
+        bool duplicate = false;
+        for (auto elem : circuit.elements) {
+            if (elem->getName() == name) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            throw DuplicateNameException();
+        }
+
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
+
         circuit.addElement(new Resistor(name, n1, n2, val));
     }
     else if (action == "addC") {
         string name = tokens[1];
+        bool duplicate = false;
+        for (auto elem : circuit.elements) {
+            if (elem->getName() == name) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            throw DuplicateNameException();
+        }
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
@@ -1069,6 +1056,16 @@ void inputHandler(const string &input, Circuit &circuit) {
     }
     else if (action == "addL") {
         string name = tokens[1];
+        bool duplicate = false;
+        for (auto elem : circuit.elements) {
+            if (elem->getName() == name) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            throw DuplicateNameException();
+        }
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
@@ -1076,6 +1073,16 @@ void inputHandler(const string &input, Circuit &circuit) {
     }
     else if (action == "addVS") {
         string name = tokens[1];
+        bool duplicate = false;
+        for (auto elem : circuit.elements) {
+            if (elem->getName() == name) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            throw DuplicateNameException();
+        }
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
@@ -1083,6 +1090,16 @@ void inputHandler(const string &input, Circuit &circuit) {
     }
     else if (action == "addCS") {
         string name = tokens[1];
+        bool duplicate = false;
+        for (auto elem : circuit.elements) {
+            if (elem->getName() == name) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            throw DuplicateNameException();
+        }
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double val = parseNumber(tokens[4]);
@@ -1090,6 +1107,9 @@ void inputHandler(const string &input, Circuit &circuit) {
     }
     else if (action == "addGND") {
         if (tokens.size() >= 2) {
+            if (circuit.getGroundName() != "") {
+                throw DuplicateGroundNodeException();
+            }
             circuit.setGroundNode(tokens[1]);
         } else {
             cout << "ERROR: Missing node name for GND command" << endl;
@@ -1097,7 +1117,17 @@ void inputHandler(const string &input, Circuit &circuit) {
     }
     else if (action == "addVS_SIN") {
         // قالب: add V<name> <node+> <node-> SIN(<offset> <amplitude> <frequency>)
-        string name = tokens[1];  // چون دستور فقط "V1" داره
+        string name = tokens[1];
+        bool duplicate = false;
+        for (auto elem : circuit.elements) {
+            if (elem->getName() == name) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) {
+            throw DuplicateNameException();
+        }
         Node* n1 = circuit.getOrCreateNode(tokens[2]);
         Node* n2 = circuit.getOrCreateNode(tokens[3]);
         double offset = parseNumber(tokens[4]);
@@ -1106,29 +1136,18 @@ void inputHandler(const string &input, Circuit &circuit) {
         circuit.addElement(new VoltageSource(name, n1, n2, offset, amp, freq));
     }
     else if (action == "transient") {
-        if (circuit.getGroundNodes() != "")
+        if (circuit.getGroundName() != "")
             circuit.simulateTransient(); // tokens[1] = ground node name
         else
             cout << "ERROR: Missing ground node in 'transient' command.\n";
     }
-
-    else if (action == "deleteR") {
-        string name = tokens[1];
-        circuit.deleteElement(name);
+    else if (action == "transient_currents") {
+        if (circuit.getGroundName() != "")
+            circuit.simulateTransientWithCurrents();
+        else
+            cout << "ERROR: Missing ground node.\n";
     }
-    else if (action == "deleteC") {
-        string name = tokens[1];
-        circuit.deleteElement(name);
-    }
-    else if (action == "deleteL") {
-        string name = tokens[1];
-        circuit.deleteElement(name);
-    }
-    else if (action == "deleteVS") {
-        string name = tokens[1];
-        circuit.deleteElement(name);
-    }
-    else if (action == "deleteCS") {
+    else if (action == "delete") {
         string name = tokens[1];
         circuit.deleteElement(name);
     }
@@ -1146,7 +1165,6 @@ void inputHandler(const string &input, Circuit &circuit) {
         circuit.listNodes();
     }
     else if (action == "analyze") {
-//        if (tokens.size() >= 2)
         cout << circuit.groundName << endl;
             circuit.solveNodalAnalysis();
     }
@@ -1157,51 +1175,6 @@ void inputHandler(const string &input, Circuit &circuit) {
             circuit.setTransientParams(dt, steps);
             cout << "Time step = " << dt << " s, total steps = " << steps << endl;
         }
-    }
-    else if (action == "simulateRC") {
-        double R = parseNumber(tokens[1]);
-        double C = parseNumber(tokens[2]);
-        double Vin = parseNumber(tokens[3]);
-        double dt = parseNumber(tokens[4]);
-        double totalTime = parseNumber(tokens[5]);
-        circuit.simulateRC(R, C, Vin, dt, totalTime);
-    }
-    else if (action == "simulateAC") {
-        double R = parseNumber(tokens[1]);
-        double L = parseNumber(tokens[2]);
-        double C = parseNumber(tokens[3]);
-        double Vin = parseNumber(tokens[4]);
-        double startFreq = parseNumber(tokens[5]);
-        double endFreq = parseNumber(tokens[6]);
-        double stepFreq = parseNumber(tokens[7]);
-        circuit.simulateAC(R, L, C, Vin, startFreq, endFreq, stepFreq);
-    }
-    else if (action == "simulateRLC") {
-        double R = parseNumber(tokens[1]);
-        double L = parseNumber(tokens[2]);
-        double C = parseNumber(tokens[3]);
-        double Vin = parseNumber(tokens[4]);
-        double dt = parseNumber(tokens[5]);
-        double totalTime = parseNumber(tokens[6]);
-        circuit.simulateRLC(R, L, C, Vin, dt, totalTime);
-    }
-    else if (action == "simulateFFT") {
-        double R = parseNumber(tokens[1]);
-        double C = parseNumber(tokens[2]);
-        double Vin = parseNumber(tokens[3]);
-        double dt = parseNumber(tokens[4]);
-        double totalTime = parseNumber(tokens[5]);
-        circuit.simulateFFT(R, C, Vin, dt, totalTime);
-    }
-    else if (action == "simulateSweep") {
-        double startR = parseNumber(tokens[1]);
-        double endR = parseNumber(tokens[2]);
-        double stepR = parseNumber(tokens[3]);
-        double C = parseNumber(tokens[4]);
-        double Vin = parseNumber(tokens[5]);
-        double dt = parseNumber(tokens[6]);
-        double totalTime = parseNumber(tokens[7]);
-        circuit.simulateSweep(startR, endR, stepR, C, Vin, dt, totalTime);
     }
     else {
         cout << "ERROR: Unknown command action" << endl;
@@ -1233,18 +1206,9 @@ void chooseSchematic(const string &numStr) {
     for (const auto &line : sch.lines) {
         string line2 = "add " + line;
         inputHandler(line2, circuit);
-
-//        if (line2.substr(3, 3) == "GND") {
-//            line2 = "add GND " + line2.substr(8);
-//            inputHandler(line2, circuit);
-//        }
     }
 
-//    if (circuit.getGroundNodes() != "") {
-//        string line2 = "add GND " + circuit.getGroundNodes();
-//        inputHandler(line2, circuit);
-//    }
-        circuit.schematicPath = sch.schematichPath;
+    circuit.schematicPath = sch.schematichPath;
 
 }
 
@@ -1252,7 +1216,7 @@ void saveSchematic(Circuit &circuit) {
     vector<string> newLines;
     for (auto element : circuit.elements) {
         string newLine = "";
-
+        bool isSin  = false;
         if (element->getType() == "Resistor") {
             newLine = "R ";
         } else if (element->getType() == "Capacitor") {
@@ -1262,20 +1226,33 @@ void saveSchematic(Circuit &circuit) {
             newLine = "L ";
 
         } else if (element->getType() == "VoltageSource") {
-            newLine = "VS ";
-
+            VoltageSource* vs = dynamic_cast<VoltageSource*>(element);
+            if (vs && vs->isSine) {
+                isSin = true;
+                ostringstream oss;
+                oss << "V " << vs->getName() << " "
+                    << vs->getNode1()->getName() << " "
+                    << vs->getNode2()->getName() << " "
+                    << "SIN(" << vs->getValue() << " " << vs->amplitude << " " << vs->frequency << ")";
+                newLines.push_back(oss.str());
+                continue;
+            } else {
+                newLine = "VS ";
+            }
         } else if (element->getType() == "CurrentSource") {
             newLine = "CS ";
         }
 
-        newLine = newLine + element->getName() + " " + element->getNode1()->getName() + " " + element->getNode2()->getName()
-                    + " " + to_string(element->getValue());
+        if(!isSin) {
+            newLine = newLine + element->getName() + " " + element->getNode1()->getName() + " " + element->getNode2()->getName()
+                      + " " + to_string(element->getValue());
+        }
 
         newLines.push_back(newLine);
     }
 
-    if (circuit.getGroundNodes() != "") {
-        string newLine = "GND " + circuit.getGroundNodes();
+    if (circuit.getGroundName() != "") {
+        string newLine = "GND " + circuit.getGroundName();
         newLines.push_back(newLine);
     }
 
