@@ -101,12 +101,23 @@ string extractFileName(const string &filePath) {
 vector<double> gaussianElimination(vector<vector<double>> A, vector<double> b) {
     int n = A.size();
     for (int i = 0; i < n; i++) {
+        int maxRow = i;
+        for (int k = i + 1; k < n; k++) {
+            if (abs(A[k][i]) > abs(A[maxRow][i])) {
+                maxRow = k;
+            }
+        }
+        swap(A[i], A[maxRow]);
+        swap(b[i], b[maxRow]);
+
         double pivot = A[i][i];
-        if (pivot == 0)
+        if (abs(pivot) < 1e-12)
             throw SingularMatrixException();
+
         for (int j = i; j < n; j++)
             A[i][j] /= pivot;
         b[i] /= pivot;
+
         for (int k = i + 1; k < n; k++) {
             double factor = A[k][i];
             for (int j = i; j < n; j++)
@@ -309,7 +320,7 @@ public:
         totalSteps = steps;
     }
 
-    void solveNodalAnalysis() {
+   void solveNodalAnalysis() {
         bool foundGround = false;
         for (auto node : nodes) {
             if (node->getName() == groundName) { foundGround = true; break; }
@@ -321,7 +332,6 @@ public:
         for (auto node : nodes)
             if (node->getName() != groundName)
                 unknownNodes.push_back(node);
-
         int n = unknownNodes.size();
         if (n == 0) {
             cout << "All nodes are ground!" << endl;
@@ -331,12 +341,11 @@ public:
         map<string, int> nodeIndex;
         for (int i = 0; i < n; i++)
             nodeIndex[unknownNodes[i]->getName()] = i;
-
         vector<vector<double>> A(n, vector<double>(n, 0.0));
         vector<double> b(n, 0.0);
 
         for (auto elem : elements) {
-            // Process resistors.
+            // Process Resistors
             Resistor* r = dynamic_cast<Resistor*>(elem);
             if (r != nullptr) {
                 double g = 1.0 / r->getValue();
@@ -356,15 +365,13 @@ public:
                     A[i][i] += g;
                 }
             }
-
-
+            // Process Voltage Sources
             VoltageSource* vs = dynamic_cast<VoltageSource*>(elem);
             if (vs != nullptr) {
                 double V = vs->getValue();
                 const double G_big = 1e6;
                 string nodeA = vs->getNode1()->getName();
                 string nodeB = vs->getNode2()->getName();
-
                 if (nodeA == groundName && nodeB != groundName) {
                     int j = nodeIndex[nodeB];
                     A[j][j] += G_big;
@@ -378,9 +385,26 @@ public:
                          << " is not connected to ground. Skipping it." << endl;
                 }
             }
+            // Process Inductors for DC analysis
+            if (Inductor* ind = dynamic_cast<Inductor*>(elem)) {
+                const double G_big = 1e6; // A very high conductance
+                string nodeA = ind->getNode1()->getName();
+                string nodeB = ind->getNode2()->getName();
+                if (nodeA == groundName && nodeB != groundName) {
+                    int j = nodeIndex[nodeB];
+                    A[j][j] += G_big;
+                } else if (nodeB == groundName && nodeA != groundName) {
+                    int i = nodeIndex[nodeA];
+                    A[i][i] += G_big;
+                } else {
+                    // If neither node is ground, then without modified nodal analysis this might cause a singular system.
+                    cout << "Warning: Inductor " << ind->getName() << " not referenced to ground may lead to a singular matrix." << endl;
+                }
+                // Continue to next element.
+                continue;
+            }
 
-
-            // Process current sources.
+            // Process Current Sources
             CurrentSource* cs = dynamic_cast<CurrentSource*>(elem);
             if (cs != nullptr) {
                 double I = cs->getValue();
@@ -397,68 +421,49 @@ public:
             }
         }
 
-        try {
-            vector<double> voltages = gaussianElimination(A, b);
-            cout << "\nNodal Voltages (with ground node " << groundName << " = 0 V):" << endl;
-            for (auto &p : nodeIndex)
-                cout << p.first << " = " << voltages[p.second] << " V" << endl;
-        }
-        catch (const SingularMatrixException &e) {
-            cout << e.what() << endl;
-        }
-        catch (const exception &e) {
-            cout << "Error during analysis: " << e.what() << endl;
-        }
+        vector<double> voltages = gaussianElimination(A, b);
+        cout << "\nNodal Voltages (with ground node " << groundName << " = 0 V):" << endl;
+        for (auto &p : nodeIndex)
+            cout << p.first << " = " << voltages[p.second] << " V" << endl;
     }
 
-    void simulateTransient() {
-        // بررسی وجود گره زمین
+       void simulateTransient() {
         bool foundGround = false;
-        for (auto node : nodes) {
-            if (node->getName() == groundName)
-                foundGround = true;
-        }
-        if (!foundGround) throw NoGroundException();
+        for (auto node : nodes)
+            if (node->getName() == groundName) { foundGround = true; break; }
+        if (!foundGround)
+            throw NoGroundException();
 
-        // گره‌های ناشناخته (به جز ground)
         vector<Node*> unknownNodes;
-        for (auto node : nodes) {
+        for (auto node : nodes)
             if (node->getName() != groundName)
                 unknownNodes.push_back(node);
-        }
-
         int n = unknownNodes.size();
         if (n == 0) {
-            cout << "No unknown nodes.\n";
+            cout << "No unknown nodes." << endl;
             return;
         }
-
-        // نگاشت گره به اندیس ماتریس
         map<string, int> nodeIndex;
         for (int i = 0; i < n; ++i)
             nodeIndex[unknownNodes[i]->getName()] = i;
-
-        // ولتاژهای قبلی برای خازن‌ها
         map<string, double> prevVoltages;
         for (auto node : unknownNodes)
             prevVoltages[node->getName()] = 0.0;
 
-        cout << "--- Transient Simulation Start ---\n";
+        // Static map to hold inductor currents (companion model state)
+        static map<string, double> inductorCurrents;
 
+        cout << "--- Transient Simulation Start ---" << endl;
         for (int step = 0; step < totalSteps; ++step) {
             double time = step * timeStep;
-
-            // ساخت ماتریس A و بردار b
             vector<vector<double>> A(n, vector<double>(n, 0.0));
             vector<double> b(n, 0.0);
-
+            // Stamp each circuit element
             for (auto elem : elements) {
                 string na = elem->getNode1()->getName();
                 string nb = elem->getNode2()->getName();
                 int i = (na != groundName) ? nodeIndex[na] : -1;
                 int j = (nb != groundName) ? nodeIndex[nb] : -1;
-
-                // مقاومت
                 if (elem->getType() == "Resistor") {
                     double g = 1.0 / elem->getValue();
                     if (i != -1) A[i][i] += g;
@@ -468,22 +473,17 @@ public:
                         A[j][i] -= g;
                     }
                 }
-
-                    // منبع جریان
-                else if (elem->getType() == "CS") {
+                else if (elem->getType() == "CurrentSource") {
                     double I = elem->getValue();
                     if (i != -1) b[i] += I;
                     if (j != -1) b[j] -= I;
                 }
-
-                    // خازن (با روش اویلر معکوس)
                 else if (elem->getType() == "Capacitor") {
                     double C = elem->getValue();
-                    double G = C / timeStep;
+                    double G = C / timeStep; // Equivalent conductance
                     double v_prev_a = (i != -1) ? prevVoltages[na] : 0.0;
                     double v_prev_b = (j != -1) ? prevVoltages[nb] : 0.0;
                     double Ieq = G * (v_prev_a - v_prev_b);
-
                     if (i != -1) {
                         A[i][i] += G;
                         b[i] += Ieq;
@@ -497,26 +497,33 @@ public:
                         A[j][i] -= G;
                     }
                 }
-
-                    // سلف ≈ اتصال کوتاه
                 else if (elem->getType() == "Inductor") {
-                    double G_short = 1e6;
-                    if (i != -1) A[i][i] += G_short;
-                    if (j != -1) A[j][j] += G_short;
+                    // Companion model for inductors using the backward Euler method.
+                    double L = elem->getValue();
+                    double G_ind = timeStep / L;
+                    string indName = elem->getName();
+                    if (inductorCurrents.find(indName) == inductorCurrents.end())
+                        inductorCurrents[indName] = 0.0; // Initial current = 0
+                    double I_prev = inductorCurrents[indName];
+                    if (i != -1) {
+                        A[i][i] += G_ind;
+                        b[i] -= I_prev;
+                    }
+                    if (j != -1) {
+                        A[j][j] += G_ind;
+                        b[j] += I_prev;
+                    }
                     if (i != -1 && j != -1) {
-                        A[i][j] -= G_short;
-                        A[j][i] -= G_short;
+                        A[i][j] -= G_ind;
+                        A[j][i] -= G_ind;
                     }
                 }
-
-                    // منبع ولتاژ DC یا سینوسی
-                else if (elem->getType() == "VS") {
+                else if (elem->getType() == "VoltageSource") {
                     VoltageSource* vs = dynamic_cast<VoltageSource*>(elem);
                     if (!vs) continue;
-                    double V = vs->getValue(); // پیش‌فرض DC
+                    double V = vs->getValue();
                     if (vs->isSine)
                         V = V + vs->amplitude * sin(2 * M_PI * vs->frequency * time);
-
                     const double G_big = 1e6;
                     if (na == groundName && j != -1) {
                         A[j][j] += G_big;
@@ -525,28 +532,40 @@ public:
                         A[i][i] += G_big;
                         b[i] += V * G_big;
                     } else if (i != -1 && j != -1) {
-                        // بین دو گره غیر ground: فعلاً رد می‌کنیم
-                        cout << "⚠️  Skipping VS " << vs->getName() << " (not grounded)\n";
+                        cout << "⚠️  Skipping VS " << vs->getName() << " (not grounded)" << endl;
                     }
                 }
             }
 
-            // حل A.x = b
             vector<double> x = gaussianElimination(A, b);
 
-            // چاپ خروجی
-            cout << "t=" << time << "s: ";
+            // Update inductor currents based on the newly computed node voltages.
+            for (auto elem : elements) {
+                if (elem->getType() == "Inductor") {
+                    string na = elem->getNode1()->getName();
+                    string nb = elem->getNode2()->getName();
+                    int i = (na != groundName) ? nodeIndex[na] : -1;
+                    int j = (nb != groundName) ? nodeIndex[nb] : -1;
+                    double V_ind = 0.0;
+                    if (i != -1) V_ind += x[i];
+                    if (j != -1) V_ind -= x[j];
+                    double G_ind = timeStep / elem->getValue();
+                    string indName = elem->getName();
+                    inductorCurrents[indName] = inductorCurrents[indName] + G_ind * V_ind;
+                }
+            }
+            cout << "t = " << time << " s: ";
             for (int k = 0; k < n; ++k) {
-                string name = unknownNodes[k]->getName();
+                string nodeName = unknownNodes[k]->getName();
                 double v = x[k];
-                prevVoltages[name] = v;
-                cout << name << "=" << v << "V  ";
+                prevVoltages[nodeName] = v;
+                cout << nodeName << " = " << v << " V  ";
             }
             cout << endl;
         }
-
-        cout << "--- Transient Simulation Done ---\n";
+        cout << "--- Transient Simulation Done ---" << endl;
     }
+
 
 
     //------------------ Transient RC Simulation ------------------
@@ -556,11 +575,11 @@ public:
             return;
         }
         double Vc = 0.0;
-        int steps = totalTime / dt;
+        int steps = (totalTime / dt);
         cout << "\nSimulating RC Circuit:" << endl;
         cout << "Time(s) | Vc(V)" << endl;
         cout << "-------------------" << endl;
-        for (int i = 0; i <= steps; i++) {
+        for (int i = 0; i <= steps; i+=10) {
             double time = i * dt;
             cout << time << " | " << Vc << endl;
             Vc = Vc + dt * ((Vin - Vc) / (R * C));
@@ -569,37 +588,33 @@ public:
 
     //------------------ AC Analysis Simulation ------------------
     void simulateAC(double R, double L, double C, double Vin, double startFreq, double endFreq, double stepFreq) {
-        std::complex<double> j(0.0, 1.0);
+        complex<double> j(0.0, 1.0);
         cout << "\nAC Analysis Simulation (Series RLC):" << endl;
         cout << "Freq(Hz) | Vout(V) | Phase(deg)" << endl;
         cout << "---------------------------------" << endl;
-        for (double f = startFreq; f <= endFreq; f += stepFreq) {
+        for (double f = startFreq; f <= endFreq; f += 10*stepFreq) {
             double omega = 2 * M_PI * f;
-            std::complex<double> Z_R(R, 0.0);
-            std::complex<double> Z_L = j * omega * L;
-            std::complex<double> Z_C = 1.0 / (j * omega * C);
-            std::complex<double> Z_total = Z_R + Z_L + Z_C;
-
+            complex<double> Z_R(R, 0.0);
+            complex<double> Z_L = j * omega * L;
+            complex<double> Z_C = 1.0 / (j * omega * C);
+            complex<double> Z_total = Z_R + Z_L + Z_C;
             double Vout = Vin * abs(Z_C) / abs(Z_total);
             double phase = arg(Z_C / Z_total) * 180.0 / M_PI;
-
             cout << f << " | " << Vout << " | " << phase << endl;
         }
     }
-
     //------------------ Transient RLC Simulation ------------------
     void simulateRLC(double R, double L, double C, double Vin, double dt, double totalTime) {
         if (R <= 0 || L <= 0 || C <= 0) {
             cout << "Error: Negative or zero value for a component is invalid." << endl;
             return;
         }
-        double x1 = 0.0; // Vc
-        double x2 = 0.0; // dVc/dt
+        double x1 = 0.0, x2 = 0.0;
         int steps = totalTime / dt;
         cout << "\nSimulating RLC Circuit:" << endl;
         cout << "Time(s) | Vc(V) | dVc/dt (V/s)" << endl;
         cout << "---------------------------------" << endl;
-        for (int i = 0; i <= steps; i++) {
+        for (int i = 0; i <= steps/10; i++) {
             double time = i * dt;
             cout << time << " | " << x1 << " | " << x2 << endl;
             double x1_next = x1 + dt * x2;
@@ -623,8 +638,16 @@ public:
             signal.push_back(Vc);
             Vc = Vc + dt * ((Vin - Vc) / (R * C));
         }
-        vector<complex<double>> spectrum = computeDFT(signal);
         int N = signal.size();
+        vector<complex<double>> spectrum(N);
+        for (int k = 0; k < N; k++) {
+            complex<double> sum(0.0, 0.0);
+            for (int n = 0; n < N; n++) {
+                double angle = -2 * M_PI * k * n / N;
+                sum += signal[n] * complex<double>(cos(angle), sin(angle));
+            }
+            spectrum[k] = sum;
+        }
         cout << "\nFFT of the RC transient response:" << endl;
         cout << "Freq(Hz) | Magnitude | Phase(deg)" << endl;
         for (int k = 0; k < N/2; k++) {
@@ -650,7 +673,7 @@ public:
         return X;
     }
 
-    // ------------------------- Ground --------------------------------
+    // ------------------------- Ground --------a------------------------
 
     void setGroundNode(const string& nodeName) {
         for (auto node : nodes) {
@@ -712,7 +735,7 @@ void loadNewFile(const string &filePath) {
     }
 
     bool exists = false;
-    ifstream schList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
+    ifstream schList("D:\\projects\\OOP_cLion\\Opulator\\test\\list\\w.txt");
 
     string line;
     while (getline(schList, line)) {
@@ -725,7 +748,7 @@ void loadNewFile(const string &filePath) {
 
     infile.close();
     if (!exists) {
-        ofstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt", ios::app);
+        ofstream schematicsList("D:\\projects\\OOP_cLion\\Opulator\\test\\list\\w.txt", ios::app);
         schematicsList << filePath << endl;
         schematicsList.close();
     }
@@ -735,7 +758,7 @@ void loadNewFile(const string &filePath) {
 
 void showSchematicsMenu() {
     gSchematics.clear();
-    ifstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
+    ifstream schematicsList("D:\\projects\\OOP_cLion\\Opulator\\test\\list\\w.txt");
     string schematicPath;
     while(getline(schematicsList, schematicPath)) {
         ifstream infile(schematicPath);
