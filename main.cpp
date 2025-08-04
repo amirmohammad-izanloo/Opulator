@@ -1,5 +1,11 @@
 #include <bits/stdc++.h>
 
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
+#include <SDL2/SDL2_gfx.h>
+#include <fstream>
+#include <sstream>
+
 using namespace std;
 
 //================ Custom Exception Classes =================
@@ -128,10 +134,18 @@ vector<double> gaussianElimination(vector<vector<double>> A, vector<double> b) {
 
 class Node {
     string name;
+    int x, y;
 public:
-    Node(const string& nodeName) : name(nodeName) { }
+    Node(const string& nodeName, int xCoord = 0, int yCoord = 0)
+            : name(nodeName), x(xCoord), y(yCoord) {}
+
     string getName() const { return name; }
     void setName(const string& newName) { name = newName; }
+
+    int getX() const { return x; }
+    int getY() const { return y; }
+    void setX(int xCoord) { x = xCoord; }
+    void setY(int yCoord) { y = yCoord; }
 };
 
 class Element {
@@ -1202,7 +1216,7 @@ void chooseSchematic(const string &numStr) {
         cout << line << endl;
     }
 
-    cout << sch.lines.size() << endl;
+//    cout << sch.lines.size() << endl;
     for (const auto &line : sch.lines) {
         string line2 = "add " + line;
         inputHandler(line2, circuit);
@@ -1293,8 +1307,117 @@ void processInput(Circuit &circuit) {
     }
 }
 
+
+//================ Basic Drawing Functions ====================
+
+void drawResistor(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
+    const int segments = 6;
+    SDL_Point points[segments + 2];
+
+    double dx = (x2 - x1) / (double)(segments + 1);
+    double dy = (y2 - y1) / (double)(segments + 1);
+
+    points[0] = {x1, y1};
+    for (int i = 1; i <= segments; ++i) {
+        double offset = (i % 2 == 0) ? -5 : 5;
+        points[i].x = x1 + i * dx;
+        points[i].y = y1 + i * dy + offset;
+    }
+    points[segments + 1] = {x2, y2};
+
+    SDL_RenderDrawLines(renderer, points, segments + 2);
+}
+
+void drawCapacitor(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
+    int midX = (x1 + x2) / 2;
+    int midY = (y1 + y2) / 2;
+    SDL_RenderDrawLine(renderer, x1, y1, midX - 5, midY);
+    SDL_RenderDrawLine(renderer, midX - 5, midY - 10, midX - 5, midY + 10);
+    SDL_RenderDrawLine(renderer, midX + 5, midY - 10, midX + 5, midY + 10);
+    SDL_RenderDrawLine(renderer, midX + 5, midY, x2, y2);
+}
+
+void drawInductor(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
+    int midX = (x1 + x2) / 2;
+    arcRGBA(renderer, midX - 10, y1, 5, 0, 180, 0, 0, 0, 255);
+    arcRGBA(renderer, midX, y1, 5, 0, 180, 0, 0, 0, 255);
+    arcRGBA(renderer, midX + 10, y1, 5, 0, 180, 0, 0, 0, 255);
+    SDL_RenderDrawLine(renderer, x1, y1, midX - 15, y1);
+    SDL_RenderDrawLine(renderer, midX + 15, y1, x2, y2);
+}
+
+void drawVoltageSource(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
+    int cx = (x1 + x2) / 2;
+    int cy = (y1 + y2) / 2;
+    circleRGBA(renderer, cx, cy, 15, 0, 0, 0, 255); // بزرگ‌تر
+
+    // علامت مثبت سمت گره اول
+    SDL_RenderDrawLine(renderer, cx - 8, cy - 5, cx - 8, cy + 5);
+    SDL_RenderDrawLine(renderer, cx - 12, cy, cx - 4, cy);
+
+    // علامت منفی سمت گره دوم
+    SDL_RenderDrawLine(renderer, cx + 8 - 4, cy, cx + 8 + 4, cy);
+}
+
+void drawCurrentSource(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
+    int cx = (x1 + x2) / 2;
+    int cy = (y1 + y2) / 2;
+    circleRGBA(renderer, cx, cy, 15, 0, 0, 0, 255); // بزرگ‌تر
+
+    // فلش از سمت x1,y1 به x2,y2
+    double angle = atan2(y2 - y1, x2 - x1);
+    double len = 10;
+    int xTip = cx + cos(angle) * len;
+    int yTip = cy + sin(angle) * len;
+    int xBase1 = cx - cos(angle) * len + sin(angle) * 5;
+    int yBase1 = cy - sin(angle) * len - cos(angle) * 5;
+    int xBase2 = cx - cos(angle) * len - sin(angle) * 5;
+    int yBase2 = cy - sin(angle) * len + cos(angle) * 5;
+    filledTrigonRGBA(renderer, xTip, yTip, xBase1, yBase1, xBase2, yBase2, 0, 0, 0, 255);
+}
+
+void drawGround(SDL_Renderer* renderer, int x, int y) {
+    SDL_RenderDrawLine(renderer, x, y, x, y + 9);
+    SDL_RenderDrawLine(renderer, x - 10, y + 9, x + 10, y + 9);
+    SDL_RenderDrawLine(renderer, x - 8, y + 12, x + 8, y + 12);
+    SDL_RenderDrawLine(renderer, x - 6, y + 15, x + 6, y + 15);
+}
+
+
+
+
 //================ Main Function =============================
-int main() {
-    processInput(circuit);
+int main(int argc, char* argv[]) {
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window* window = SDL_CreateWindow("Circuit Visualizer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_SHOWN);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderClear(renderer);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+
+//    drawResistor(renderer, 100, 200, 300, 200);
+//    drawCapacitor(renderer, 100, 250, 300, 250);
+//    drawInductor(renderer, 100, 300, 300, 300);
+//    drawVoltageSource(renderer, 100, 350, 300, 350);
+//    drawCurrentSource(renderer, 100, 400, 300, 400);
+//    drawGround(renderer, 200, 450);
+
+    SDL_RenderPresent(renderer);
+    SDL_Event e;
+    bool quit = false;
+    while (!quit) {
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT) {
+                quit = true;
+            }
+        }
+    }
+
+
+
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
     return 0;
 }
