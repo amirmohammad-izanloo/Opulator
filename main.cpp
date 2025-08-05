@@ -1455,6 +1455,10 @@ void drawToolbar(SDL_Renderer* renderer) {
     x += 30;
 }
 
+bool wireStartSelected = false;
+int wireX1 = 0, wireY1 = 0;
+vector<pair<SDL_Point, SDL_Point>> wires;
+
 void drawWires(SDL_Renderer* r, const vector<pair<SDL_Point, SDL_Point>>& wires) {
     for (auto& w : wires) {
         SDL_RenderDrawLine(r, w.first.x, w.first.y, w.second.x, w.second.y);
@@ -1497,6 +1501,99 @@ void drawPreviewElement(SDL_Renderer* r, int preX, int preY) {
 }
 
 
+// ===================== Connectors ========================
+
+struct Connector {
+    int id;
+    int x, y;
+};
+
+vector<Connector> allConnectors;
+map<int, vector<int>> connectorGraph; // id → list of connected ids
+
+
+int connectorIdCounter = 0;
+
+map<int, string> connectorToNodeName;
+
+int addConnector(SDL_Renderer* renderer, int x, int y) {
+    for (const auto& c : allConnectors) {
+        if (abs(c.x - x) <= 2 && abs(c.y - y) <= 2) return c.id;
+    }
+    allConnectors.push_back({connectorIdCounter, x, y});
+    return connectorIdCounter++;
+}
+
+void registerConnectorConnection(int id1, int id2) {
+    connectorGraph[id1].push_back(id2);
+    connectorGraph[id2].push_back(id1);
+}
+
+void extractConnectorsFromPlacedElements(SDL_Renderer* renderer) {
+    for (auto& e : placedElements) {
+        int x1 = e.x - 25, x2 = e.x + 25;
+        int y = e.y;
+        if (e.type == GROUND) {
+            int id = addConnector(renderer, e.x, e.y);
+        } else {
+            int id1 = addConnector(renderer, x1, y);
+            int id2 = addConnector(renderer, x2, y);
+        }
+    }
+}
+
+void extractConnectorsFromWires(SDL_Renderer* renderer) {
+    for (auto& w : wires) {
+        int id1 = addConnector(renderer, w.first.x, w.first.y);
+        int id2 = addConnector(renderer, w.second.x, w.second.y);
+        registerConnectorConnection(id1, id2);
+    }
+}
+
+void analyzeNodeConnections(SDL_Renderer* renderer) {
+    extractConnectorsFromPlacedElements(renderer);
+    extractConnectorsFromWires(renderer);
+
+    for (int i = 0; i < allConnectors.size(); ++i) {
+        filledCircleRGBA(renderer, allConnectors[i].x, allConnectors[i].y, 3, 0, 0, 255, 255);
+
+    }
+
+    map<int, int> parent;
+    function<int(int)> find = [&](int u) {
+        if (parent[u] != u) parent[u] = find(parent[u]);
+        return parent[u];
+    };
+    auto unite = [&](int u, int v) {
+        parent[find(u)] = find(v);
+    };
+
+    // initialize each connector as its own parent
+    for (const auto& c : allConnectors) {
+        parent[c.id] = c.id;
+    }
+
+    // unite connected connectors via wires
+    for (const auto& [u, neighbors] : connectorGraph) {
+        for (int v : neighbors) {
+            unite(u, v);
+        }
+    }
+
+    // assign node names to connected components
+    map<int, string> rootToNodeName;
+    map<int, string> connectorToNode;
+    int nodeCounter = 1;
+    for (const auto& c : allConnectors) {
+        int root = find(c.id);
+        if (!rootToNodeName.count(root)) {
+            rootToNodeName[root] = "n" + to_string(nodeCounter++);
+        }
+        connectorToNode[c.id] = rootToNodeName[root];
+    }
+
+
+}
 
 //================ Main Function =============================
 int main(int argc, char* argv[]) {
@@ -1522,19 +1619,6 @@ int main(int argc, char* argv[]) {
     SDL_Event e;
     bool quit = false;
 
-    bool wireStartSelected = false;
-    int wireX1 = 0, wireY1 = 0;
-    vector<pair<SDL_Point, SDL_Point>> wires;
-
-    struct Connector {
-        int id;
-        int x, y;
-    };
-
-    vector<Connector> allConnectors;
-    vector<pair<int, int>> connections; // pair<id1, id2>
-
-    map<int, string> connectorToNodeName;
 
     while (!quit) {
         int mx, my;
@@ -1618,6 +1702,8 @@ int main(int argc, char* argv[]) {
         drawPlacedElements(renderer);
         if (showFileMenu) drawFileDropdown(renderer, font);
         if (showPreview) drawPreviewElement(renderer, preX, preY);
+
+        analyzeNodeConnections(renderer);
 //        if (wires.size() != 0) cout << wires.size() << endl;
 //        if (currentTool != 0) cout << currentTool << endl;
         drawWires(renderer, wires);
