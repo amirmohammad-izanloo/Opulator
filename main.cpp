@@ -1310,13 +1310,74 @@ void processInput(Circuit &circuit) {
 
 //================ Basic Drawing Functions ====================
 
-void drawResistor(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
+enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE };
+struct PlacedElement {
+    ToolType type;
+    int x, y;
+};
+vector<PlacedElement> placedElements;
+ToolType currentTool = NONE;
+
+
+void drawConnector(SDL_Renderer* r, int x, int y) {
+    SDL_Rect pin = {x - 2, y - 2, 5, 5};
+    SDL_RenderFillRect(r, &pin);
+}
+
+void drawWireEnds(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
+    SDL_RenderDrawLine(r, x1 - 10, y1, x1, y1);
+    SDL_RenderDrawLine(r, x2, y2, x2 + 10, y2);
+    drawConnector(r, x1 - 10, y1);
+    drawConnector(r, x2 + 10, y2);
+}
+
+
+void drawMenuBar(SDL_Renderer* renderer, TTF_Font* font) {
+    SDL_Rect menuBar = {0, 0, 1280, 25};
+    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
+    SDL_RenderFillRect(renderer, &menuBar);
+
+    SDL_Color textColor = {255, 255, 255};
+    SDL_Surface* surfFile = TTF_RenderText_Solid(font, "File", textColor);
+    SDL_Surface* surfEdit = TTF_RenderText_Solid(font, "Edit", textColor);
+    SDL_Texture* texFile = SDL_CreateTextureFromSurface(renderer, surfFile);
+    SDL_Texture* texEdit = SDL_CreateTextureFromSurface(renderer, surfEdit);
+
+    SDL_Rect fileRect = {10, 4, surfFile->w, surfFile->h};
+    SDL_Rect editRect = {70, 4, surfEdit->w, surfEdit->h};
+    SDL_RenderCopy(renderer, texFile, nullptr, &fileRect);
+    SDL_RenderCopy(renderer, texEdit, nullptr, &editRect);
+
+    SDL_FreeSurface(surfFile);
+    SDL_FreeSurface(surfEdit);
+    SDL_DestroyTexture(texFile);
+    SDL_DestroyTexture(texEdit);
+}
+
+void drawFileDropdown(SDL_Renderer* renderer, TTF_Font* font) {
+    SDL_Rect bg = {10, 25, 100, 70};
+    SDL_SetRenderDrawColor(renderer, 80, 80, 80, 255);
+    SDL_RenderFillRect(renderer, &bg);
+
+    SDL_Color white = {255, 255, 255};
+    const char* options[] = {"New", "Open", "Save"};
+
+    for (int i = 0; i < 3; ++i) {
+        SDL_Surface* surf = TTF_RenderText_Solid(font, options[i], white);
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+        SDL_Rect dst = {15, 30 + i * 20, surf->w, surf->h};
+        SDL_RenderCopy(renderer, tex, nullptr, &dst);
+        SDL_FreeSurface(surf);
+        SDL_DestroyTexture(tex);
+    }
+}
+
+void drawResistor(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
+    drawWireEnds(r, x1, y1, x2, y2);
     const int segments = 6;
     SDL_Point points[segments + 2];
-
     double dx = (x2 - x1) / (double)(segments + 1);
     double dy = (y2 - y1) / (double)(segments + 1);
-
     points[0] = {x1, y1};
     for (int i = 1; i <= segments; ++i) {
         double offset = (i % 2 == 0) ? -5 : 5;
@@ -1324,100 +1385,251 @@ void drawResistor(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
         points[i].y = y1 + i * dy + offset;
     }
     points[segments + 1] = {x2, y2};
-
-    SDL_RenderDrawLines(renderer, points, segments + 2);
+    SDL_RenderDrawLines(r, points, segments + 2);
 }
 
-void drawCapacitor(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
-    int midX = (x1 + x2) / 2;
-    int midY = (y1 + y2) / 2;
-    SDL_RenderDrawLine(renderer, x1, y1, midX - 5, midY);
-    SDL_RenderDrawLine(renderer, midX - 5, midY - 10, midX - 5, midY + 10);
-    SDL_RenderDrawLine(renderer, midX + 5, midY - 10, midX + 5, midY + 10);
-    SDL_RenderDrawLine(renderer, midX + 5, midY, x2, y2);
+void drawCapacitor(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
+    drawWireEnds(r, x1, y1, x2, y2);
+    int mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    SDL_RenderDrawLine(r, x1, y1, mx - 5, my);
+    SDL_RenderDrawLine(r, mx - 5, my - 10, mx - 5, my + 10);
+    SDL_RenderDrawLine(r, mx + 5, my - 10, mx + 5, my + 10);
+    SDL_RenderDrawLine(r, mx + 5, my, x2, y2);
 }
 
-void drawInductor(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
-    int midX = (x1 + x2) / 2;
-    arcRGBA(renderer, midX - 10, y1, 5, 0, 180, 0, 0, 0, 255);
-    arcRGBA(renderer, midX, y1, 5, 0, 180, 0, 0, 0, 255);
-    arcRGBA(renderer, midX + 10, y1, 5, 0, 180, 0, 0, 0, 255);
-    SDL_RenderDrawLine(renderer, x1, y1, midX - 15, y1);
-    SDL_RenderDrawLine(renderer, midX + 15, y1, x2, y2);
+void drawInductor(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
+    drawWireEnds(r, x1, y1, x2, y2);
+    int mx = (x1 + x2) / 2;
+    arcRGBA(r, mx - 10, y1, 5, 0, 180, 0, 0, 0, 255);
+    arcRGBA(r, mx, y1, 5, 0, 180, 0, 0, 0, 255);
+    arcRGBA(r, mx + 10, y1, 5, 0, 180, 0, 0, 0, 255);
+    SDL_RenderDrawLine(r, x1, y1, mx - 15, y1);
+    SDL_RenderDrawLine(r, mx + 15, y1, x2, y2);
 }
 
-void drawVoltageSource(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
-    int cx = (x1 + x2) / 2;
-    int cy = (y1 + y2) / 2;
-    circleRGBA(renderer, cx, cy, 15, 0, 0, 0, 255); // بزرگ‌تر
-
-    // علامت مثبت سمت گره اول
-    SDL_RenderDrawLine(renderer, cx - 8, cy - 5, cx - 8, cy + 5);
-    SDL_RenderDrawLine(renderer, cx - 12, cy, cx - 4, cy);
-
-    // علامت منفی سمت گره دوم
-    SDL_RenderDrawLine(renderer, cx + 8 - 4, cy, cx + 8 + 4, cy);
+void drawVoltageSource(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
+    drawWireEnds(r, x1, y1, x2, y2);
+    int cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    circleRGBA(r, cx, cy, 15, 0, 0, 0, 255);
+    SDL_RenderDrawLine(r, cx - 8, cy - 5, cx - 8, cy + 5);
+    SDL_RenderDrawLine(r, cx - 12, cy, cx - 4, cy);
+    SDL_RenderDrawLine(r, cx + 4, cy, cx + 12, cy);
 }
 
-void drawCurrentSource(SDL_Renderer* renderer, int x1, int y1, int x2, int y2) {
-    int cx = (x1 + x2) / 2;
-    int cy = (y1 + y2) / 2;
-    circleRGBA(renderer, cx, cy, 15, 0, 0, 0, 255); // بزرگ‌تر
-
-    // فلش از سمت x1,y1 به x2,y2
-    double angle = atan2(y2 - y1, x2 - x1);
-    double len = 10;
-    int xTip = cx + cos(angle) * len;
-    int yTip = cy + sin(angle) * len;
-    int xBase1 = cx - cos(angle) * len + sin(angle) * 5;
-    int yBase1 = cy - sin(angle) * len - cos(angle) * 5;
-    int xBase2 = cx - cos(angle) * len - sin(angle) * 5;
-    int yBase2 = cy - sin(angle) * len + cos(angle) * 5;
-    filledTrigonRGBA(renderer, xTip, yTip, xBase1, yBase1, xBase2, yBase2, 0, 0, 0, 255);
+void drawCurrentSource(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
+    drawWireEnds(r, x1, y1, x2, y2);
+    int cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+    circleRGBA(r, cx, cy, 15, 0, 0, 0, 255);
+    double a = atan2(y2 - y1, x2 - x1);
+    int xt = cx + cos(a) * 10, yt = cy + sin(a) * 10;
+    int xb1 = cx - cos(a) * 10 + sin(a) * 5;
+    int yb1 = cy - sin(a) * 10 - cos(a) * 5;
+    int xb2 = cx - cos(a) * 10 - sin(a) * 5;
+    int yb2 = cy - sin(a) * 10 + cos(a) * 5;
+    filledTrigonRGBA(r, xt, yt, xb1, yb1, xb2, yb2, 0, 0, 0, 255);
 }
 
-void drawGround(SDL_Renderer* renderer, int x, int y) {
-    SDL_RenderDrawLine(renderer, x, y, x, y + 9);
-    SDL_RenderDrawLine(renderer, x - 10, y + 9, x + 10, y + 9);
-    SDL_RenderDrawLine(renderer, x - 8, y + 12, x + 8, y + 12);
-    SDL_RenderDrawLine(renderer, x - 6, y + 15, x + 6, y + 15);
+void drawGround(SDL_Renderer* r, int x, int y) {
+    SDL_RenderDrawLine(r, x, y, x, y + 8);
+    SDL_RenderDrawLine(r, x - 6, y + 8, x + 6, y + 8);
+    SDL_RenderDrawLine(r, x - 4, y + 10, x + 4, y + 10);
+    SDL_RenderDrawLine(r, x - 2, y + 12, x + 2, y + 12);
+    drawConnector(r, x, y); // only one connector at top
 }
 
+void drawToolbar(SDL_Renderer* renderer) {
+    SDL_Rect bar = {0, 25, 1280, 50};
+    SDL_SetRenderDrawColor(renderer, 240, 240, 240, 255);
+    SDL_RenderFillRect(renderer, &bar);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderDrawRect(renderer, &bar);
+
+    int x = 30;
+    drawResistor(renderer, x, 50, x + 30, 50); x += 60;
+    drawCapacitor(renderer, x, 50, x + 30, 50); x += 60;
+    drawInductor(renderer, x, 50, x + 30, 50); x += 60;
+    drawVoltageSource(renderer, x, 50, x + 30, 50); x += 60;
+    drawCurrentSource(renderer, x, 50, x + 30, 50); x += 60;
+    drawGround(renderer, x + 15, 50); x += 60;
+    SDL_RenderDrawLine(renderer, x + 10, 40, x + 10, 60); // یک خط عمودی به‌عنوان نماد سیم
+    x += 30;
+}
+
+void drawWires(SDL_Renderer* r, const vector<pair<SDL_Point, SDL_Point>>& wires) {
+    for (auto& w : wires) {
+        SDL_RenderDrawLine(r, w.first.x, w.first.y, w.second.x, w.second.y);
+    }
+}
+
+void drawPlacedElements(SDL_Renderer* r) {
+    for (auto& e : placedElements) {
+        int x1 = e.x - 15, y1 = e.y;
+        int x2 = e.x + 15, y2 = e.y;
+        switch (e.type) {
+            case RESISTOR: drawResistor(r, x1, y1, x2, y2); break;
+            case CAPACITOR: drawCapacitor(r, x1, y1, x2, y2); break;
+            case INDUCTOR: drawInductor(r, x1, y1, x2, y2); break;
+            case VSOURCE: drawVoltageSource(r, x1, y1, x2, y2); break;
+            case CSOURCE: drawCurrentSource(r, x1, y1, x2, y2); break;
+            case GROUND: drawGround(r, e.x, e.y); break;
+            default: break;
+        }
+    }
+}
+
+void drawPreviewElement(SDL_Renderer* r, int preX, int preY) {
+
+    int previewX = preX, previewY = preY;
+
+    if (currentTool == NONE) return;
+    int x1 = previewX - 15, y1 = previewY;
+    int x2 = previewX + 15, y2 = previewY;
+
+    switch (currentTool) {
+        case RESISTOR: drawResistor(r, x1, y1, x2, y2); break;
+        case CAPACITOR: drawCapacitor(r, x1, y1, x2, y2); break;
+        case INDUCTOR: drawInductor(r, x1, y1, x2, y2); break;
+        case VSOURCE: drawVoltageSource(r, x1, y1, x2, y2); break;
+        case CSOURCE: drawCurrentSource(r, x1, y1, x2, y2); break;
+        case GROUND: drawGround(r, previewX, previewY); break;
+        default: break;
+    }
+}
 
 
 
 //================ Main Function =============================
 int main(int argc, char* argv[]) {
     SDL_Init(SDL_INIT_VIDEO);
+    TTF_Init();
     SDL_Window* window = SDL_CreateWindow("Circuit Visualizer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_SHOWN);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    TTF_Font* font = TTF_OpenFont("C:\\Windows\\Fonts\\Arial.ttf", 14);
+
 
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderClear(renderer);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-
-//    drawResistor(renderer, 100, 200, 300, 200);
-//    drawCapacitor(renderer, 100, 250, 300, 250);
-//    drawInductor(renderer, 100, 300, 300, 300);
-//    drawVoltageSource(renderer, 100, 350, 300, 350);
-//    drawCurrentSource(renderer, 100, 400, 300, 400);
-//    drawGround(renderer, 200, 450);
+//    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 
     SDL_RenderPresent(renderer);
+
+    bool showFileMenu = false;
+    bool fileClicked = false;
+
+    bool showPreview = false;
+    int preX, preY;
+
     SDL_Event e;
     bool quit = false;
+
+    bool wireStartSelected = false;
+    int wireX1 = 0, wireY1 = 0;
+    vector<pair<SDL_Point, SDL_Point>> wires;
+
+    struct Connector {
+        int id;
+        int x, y;
+    };
+
+    vector<Connector> allConnectors;
+    vector<pair<int, int>> connections; // pair<id1, id2>
+
+    map<int, string> connectorToNodeName;
+
     while (!quit) {
+        int mx, my;
+        SDL_GetMouseState(&mx, &my);
+        bool hoveringFile = (mx >= 10 && mx <= 60 && my <= 25);
+        if (hoveringFile) fileClicked = true;
+        bool hoveringDropdown = (mx >= 10 && mx <= 110 && my > 25 && my <= 95);
+
+
+
+        if (!hoveringDropdown && !hoveringFile) {
+            fileClicked = false;
+        }
+
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) {
                 quit = true;
+            } else if (e.type == SDL_MOUSEMOTION) {
+                showFileMenu = hoveringFile || (hoveringDropdown && fileClicked);
+
+                if (currentTool != NONE && e.motion.y > 75) {
+                    preX = e.motion.x;
+                    preY = e.motion.y;
+                    showPreview = true;
+                } else {
+                    showPreview = false;
+                }
+            } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+                if (hoveringDropdown && showFileMenu) {
+                    int option = (my - 30) / 20;
+                    switch(option) {
+                        case 0:
+                            // TODO: Implement New File
+                            break;
+                        case 1:
+                            // TODO: Implement Open File
+                            break;
+                        case 2:
+                            // TODO: Implement Save File
+                            break;
+                    }
+                    fileClicked = false;
+                    showFileMenu = false;
+                } else if (my >= 25 && my <= 75) {
+                    if (mx >= 30 && mx <= 60) currentTool = RESISTOR;
+                    else if (mx >= 90 && mx <= 120) currentTool = CAPACITOR;
+                    else if (mx >= 150 && mx <= 180) currentTool = INDUCTOR;
+                    else if (mx >= 210 && mx <= 240) currentTool = VSOURCE;
+                    else if (mx >= 270 && mx <= 300) currentTool = CSOURCE;
+                    else if (mx >= 330 && mx <= 360) currentTool = GROUND;
+                    else if (mx >= 390 && mx <= 420) currentTool = WIRE;
+
+                    if (mx >= 30 && mx <= 360) {
+                        preX = 0; preY = 0;
+                        showPreview = true;
+                    }
+                } else if (my > 75) {
+                    if (currentTool == WIRE) {
+                        if (!wireStartSelected) {
+                            wireX1 = mx; wireY1 = my;
+                            wireStartSelected = true;
+                        } else {
+                            wires.push_back({{wireX1, wireY1}, {mx, my}});
+                            wireStartSelected = false;
+                            currentTool = NONE;
+                            showPreview = false;
+                        }
+                    } else if (currentTool != NONE) {
+                        placedElements.push_back({currentTool, mx, my});
+                        currentTool = NONE;
+                        showPreview = false;
+                    }
+                }
             }
         }
+
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        SDL_RenderClear(renderer);
+        drawMenuBar(renderer, font);
+        drawToolbar(renderer);
+        drawPlacedElements(renderer);
+        if (showFileMenu) drawFileDropdown(renderer, font);
+        if (showPreview) drawPreviewElement(renderer, preX, preY);
+//        if (wires.size() != 0) cout << wires.size() << endl;
+//        if (currentTool != 0) cout << currentTool << endl;
+        drawWires(renderer, wires);
+
+        SDL_RenderPresent(renderer);
     }
 
 
-
+    TTF_CloseFont(font);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+    TTF_Quit();
     SDL_Quit();
     return 0;
 }
