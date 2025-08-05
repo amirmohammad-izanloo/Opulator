@@ -1208,6 +1208,7 @@ void chooseSchematic(const string &numStr) {
         cout << "Error : Inappropriate input" << endl;
         return;
     }
+
     // Display the chosen schematic's content.
     menuLevel = 2;
     Schematic sch = gSchematics[choice - 1];
@@ -1314,6 +1315,7 @@ enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, W
 struct PlacedElement {
     ToolType type;
     int x, y;
+    string name;
 };
 vector<PlacedElement> placedElements;
 ToolType currentTool = NONE;
@@ -1330,7 +1332,6 @@ void drawWireEnds(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
     drawConnector(r, x1 - 10, y1);
     drawConnector(r, x2 + 10, y2);
 }
-
 
 void drawMenuBar(SDL_Renderer* renderer, TTF_Font* font) {
     SDL_Rect menuBar = {0, 0, 1280, 25};
@@ -1461,7 +1462,7 @@ vector<pair<SDL_Point, SDL_Point>> wires;
 
 void drawWires(SDL_Renderer* r, const vector<pair<SDL_Point, SDL_Point>>& wires) {
     for (auto& w : wires) {
-        SDL_RenderDrawLine(r, w.first.x, w.first.y, w.second.x, w.second.y);
+        aalineRGBA(r, w.first.x, w.first.y, w.second.x, w.second.y, 0, 0, 0, 255);
     }
 }
 
@@ -1511,6 +1512,7 @@ struct Connector {
 vector<Connector> allConnectors;
 map<int, vector<int>> connectorGraph; // id → list of connected ids
 
+map<int, string> connectorToNode;
 
 int connectorIdCounter = 0;
 
@@ -1574,7 +1576,9 @@ void analyzeNodeConnections(SDL_Renderer* renderer) {
     }
 
     // unite connected connectors via wires
-    for (const auto& [u, neighbors] : connectorGraph) {
+    for (const auto& entry : connectorGraph) {
+        int u = entry.first;
+        const vector<int>& neighbors = entry.second;
         for (int v : neighbors) {
             unite(u, v);
         }
@@ -1582,7 +1586,6 @@ void analyzeNodeConnections(SDL_Renderer* renderer) {
 
     // assign node names to connected components
     map<int, string> rootToNodeName;
-    map<int, string> connectorToNode;
     int nodeCounter = 1;
     for (const auto& c : allConnectors) {
         int root = find(c.id);
@@ -1591,9 +1594,60 @@ void analyzeNodeConnections(SDL_Renderer* renderer) {
         }
         connectorToNode[c.id] = rootToNodeName[root];
     }
-
-
 }
+
+vector<string> generateAddCommands(SDL_Renderer* renderer) {
+    vector<string> commands;
+    set<string> addedNodes;
+
+    for (const auto& c : allConnectors) {
+        string nodeName = connectorToNode[c.id];
+        if (addedNodes.insert(nodeName).second) {
+            commands.push_back("add node " + nodeName + " " + to_string(c.x) + " " + to_string(c.y));
+        }
+    }
+
+    map<ToolType, char> typeChar = {
+            {RESISTOR, 'R'}, {CAPACITOR, 'C'}, {INDUCTOR, 'L'},
+            {VSOURCE, 'V'}, {CSOURCE, 'I'}, {GROUND, 'G'}
+    };
+
+    map<ToolType, int> typeCounter;
+
+    for (const auto& e : placedElements) {
+        if (e.type == WIRE) continue;
+        int x1 = e.x - 25, x2 = e.x + 25;
+        int y = e.y;
+        int id1 = (e.type == GROUND) ? addConnector(renderer, e.x, y) : addConnector(renderer, x1, y);
+        int id2 = (e.type == GROUND) ? id1 : addConnector(renderer, x2, y);
+        string node1 = connectorToNode[id1];
+        string node2 = connectorToNode[id2];
+
+        string name = typeChar[e.type] + to_string(++typeCounter[e.type]);
+        string line = "add " + string(1, typeChar[e.type]) + " " + name + " " + node1;
+        if (e.type != GROUND) line += " " + node2;
+
+        // sample values:
+        if (e.type == RESISTOR) line += " 1000";
+        else if (e.type == CAPACITOR) line += " 1e-6";
+        else if (e.type == INDUCTOR) line += " 0.01";
+        else if (e.type == VSOURCE) line += " 5";
+        else if (e.type == CSOURCE) line += " 0.1";
+
+        commands.push_back(line);
+    }
+
+    return commands;
+}
+
+void saveCircuitToFile(SDL_Renderer* renderer, const string& filename) {
+    analyzeNodeConnections(renderer);
+    vector<string> cmds = generateAddCommands(renderer);
+    ofstream out(filename);
+    for (const auto& line : cmds) out << line << "\n";
+    out.close();
+}
+
 
 //================ Main Function =============================
 int main(int argc, char* argv[]) {
@@ -1647,6 +1701,7 @@ int main(int argc, char* argv[]) {
                     showPreview = false;
                 }
             } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+                cout << "x: " << e.button.x << " y: " << e.button.y << endl;
                 if (hoveringDropdown && showFileMenu) {
                     int option = (my - 30) / 20;
                     switch(option) {
@@ -1657,7 +1712,7 @@ int main(int argc, char* argv[]) {
                             // TODO: Implement Open File
                             break;
                         case 2:
-                            // TODO: Implement Save File
+                            saveCircuitToFile(renderer, "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt");
                             break;
                     }
                     fileClicked = false;
@@ -1704,8 +1759,7 @@ int main(int argc, char* argv[]) {
         if (showPreview) drawPreviewElement(renderer, preX, preY);
 
         analyzeNodeConnections(renderer);
-//        if (wires.size() != 0) cout << wires.size() << endl;
-//        if (currentTool != 0) cout << currentTool << endl;
+
         drawWires(renderer, wires);
 
         SDL_RenderPresent(renderer);
