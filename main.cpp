@@ -180,7 +180,7 @@ class Resistor : public Element {
 public:
     Resistor(const string &elemName, Node* a, Node* b, double resistance)
             : Element(elemName, a, b, resistance, "Ohm") {
-        if (resistance <= 0)
+        if (resistance < 0)
             throw InvalidValueException();
     }
     string getType() const override { return "Resistor"; }
@@ -353,7 +353,9 @@ public:
             // Process Resistors
             Resistor* r = dynamic_cast<Resistor*>(elem);
             if (r != nullptr) {
-                double g = 1.0 / r->getValue();
+                double R = r->getValue();
+                if (R <= 1e-9) R = 1e-9; // جلوگیری از تقسیم بر صفر
+                double g = 1.0 / R;
                 string nodeA = r->getNode1()->getName();
                 string nodeB = r->getNode2()->getName();
                 if (nodeA != groundName && nodeB != groundName) {
@@ -847,7 +849,7 @@ void showSchematicsMenu() {
 vector<string> parseCommandLine(const string &cmd) {
     vector<string> tokens;
     smatch match;
-
+menuLevel = 2;
     if (menuLevel == 0 ) {
 
         // NewFile command: "NewFile <file_path>"
@@ -918,7 +920,7 @@ vector<string> parseCommandLine(const string &cmd) {
             return tokens;
         }
         // add voltage source: "add VS <Name> <node1> <node2> <value>"
-        if (regex_match(cmd, match, regex(R"(add\s+VS\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+        if (regex_match(cmd, match, regex(R"(add\s+V\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
             tokens.push_back("addVS");
             tokens.push_back(match[1].str());
             tokens.push_back(match[2].str());
@@ -927,7 +929,7 @@ vector<string> parseCommandLine(const string &cmd) {
             return tokens;
         }
         // add current source: "add CS <Name> <node1> <node2> <value>"
-        if (regex_match(cmd, match, regex(R"(add\s+CS\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
+        if (regex_match(cmd, match, regex(R"(add\s+I\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
             tokens.push_back("addCS");
             tokens.push_back(match[1].str());
             tokens.push_back(match[2].str());
@@ -942,7 +944,7 @@ vector<string> parseCommandLine(const string &cmd) {
                 tokens.push_back(match[i].str());
             return tokens;
         }
-        if (regex_match(cmd, match, regex(R"(add\s+GND\s+([^ ]+))"))) {
+        if (regex_match(cmd, match, regex(R"(add\s+G\s+([^ ]+))"))) {
             tokens.push_back("addGND");
             tokens.push_back(match[1].str()); // nodeName
             return tokens;
@@ -1002,7 +1004,9 @@ void exitSchematic(Circuit &circuit);
 void saveSchematic(Circuit &circuit);
 
 void inputHandler(const string &input, Circuit &circuit) {
+    cout << input << endl;
     vector<string> tokens = parseCommandLine(input);
+
     if (tokens.empty()) {
         cout << "ERROR: Unknown or malformed command" << endl;
         return;
@@ -1285,7 +1289,6 @@ void saveSchematic(Circuit &circuit) {
     cout << "Enter a new file or choose an old one." << endl;
 }
 
-
 void exitSchematic(Circuit &circuit) {
     circuit.reset();
     menuLevel = 0;
@@ -1316,6 +1319,7 @@ struct PlacedElement {
     ToolType type;
     int x, y;
     string name;
+    double value;
 };
 vector<PlacedElement> placedElements;
 ToolType currentTool = NONE;
@@ -1341,16 +1345,24 @@ void drawMenuBar(SDL_Renderer* renderer, TTF_Font* font) {
     SDL_Color textColor = {255, 255, 255};
     SDL_Surface* surfFile = TTF_RenderText_Solid(font, "File", textColor);
     SDL_Surface* surfEdit = TTF_RenderText_Solid(font, "Edit", textColor);
+    SDL_Surface* surfRun  = TTF_RenderText_Solid(font, "Run", textColor);
+
     SDL_Texture* texFile = SDL_CreateTextureFromSurface(renderer, surfFile);
     SDL_Texture* texEdit = SDL_CreateTextureFromSurface(renderer, surfEdit);
+    SDL_Texture* texRun  = SDL_CreateTextureFromSurface(renderer, surfRun);
 
     SDL_Rect fileRect = {10, 4, surfFile->w, surfFile->h};
     SDL_Rect editRect = {70, 4, surfEdit->w, surfEdit->h};
+    SDL_Rect runRect  = {130, 4, surfRun->w, surfRun->h};
+
     SDL_RenderCopy(renderer, texFile, nullptr, &fileRect);
     SDL_RenderCopy(renderer, texEdit, nullptr, &editRect);
+    SDL_RenderCopy(renderer, texRun,  nullptr, &runRect);
 
     SDL_FreeSurface(surfFile);
     SDL_FreeSurface(surfEdit);
+    SDL_FreeSurface(surfRun);
+    SDL_DestroyTexture(texRun);
     SDL_DestroyTexture(texFile);
     SDL_DestroyTexture(texEdit);
 }
@@ -1419,16 +1431,40 @@ void drawVoltageSource(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
 
 void drawCurrentSource(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
     drawWireEnds(r, x1, y1, x2, y2);
-    int cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+
+    int cx = (x1 + x2) / 2;
+    int cy = (y1 + y2) / 2;
     circleRGBA(r, cx, cy, 15, 0, 0, 0, 255);
-    double a = atan2(y2 - y1, x2 - x1);
-    int xt = cx + cos(a) * 10, yt = cy + sin(a) * 10;
-    int xb1 = cx - cos(a) * 10 + sin(a) * 5;
-    int yb1 = cy - sin(a) * 10 - cos(a) * 5;
-    int xb2 = cx - cos(a) * 10 - sin(a) * 5;
-    int yb2 = cy - sin(a) * 10 + cos(a) * 5;
-    filledTrigonRGBA(r, xt, yt, xb1, yb1, xb2, yb2, 0, 0, 0, 255);
+
+    // جهت جریان: از x1 به x2
+    double angle = atan2(y2 - y1, x2 - x1);
+
+    // طول فلش داخل دایره
+    int lineLen = 10;
+    int tipLen = 6;
+
+    // محاسبه‌ی محل شروع و پایان پیکان (خط)
+    int xStart = cx - cos(angle) * lineLen;
+    int yStart = cy - sin(angle) * lineLen;
+    int xTip   = cx + cos(angle) * lineLen;
+    int yTip   = cy + sin(angle) * lineLen;
+
+    // رسم خط فلش
+    SDL_RenderDrawLine(r, xStart, yStart, xTip, yTip);
+
+    // محاسبه‌ی مثلث نوک فلش
+    int baseLeftX  = xTip - cos(angle) * tipLen - sin(angle) * tipLen / 2;
+    int baseLeftY  = yTip - sin(angle) * tipLen + cos(angle) * tipLen / 2;
+
+    int baseRightX = xTip - cos(angle) * tipLen + sin(angle) * tipLen / 2;
+    int baseRightY = yTip - sin(angle) * tipLen - cos(angle) * tipLen / 2;
+
+    // رسم مثلث نوک پیکان
+    filledTrigonRGBA(r, xTip, yTip, baseLeftX, baseLeftY, baseRightX, baseRightY, 0, 0, 0, 255);
 }
+
+
+
 
 void drawGround(SDL_Renderer* r, int x, int y) {
     SDL_RenderDrawLine(r, x, y, x, y + 8);
@@ -1461,10 +1497,18 @@ int wireX1 = 0, wireY1 = 0;
 vector<pair<SDL_Point, SDL_Point>> wires;
 
 void drawWires(SDL_Renderer* r, const vector<pair<SDL_Point, SDL_Point>>& wires) {
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
     for (auto& w : wires) {
+        // draw wire line
         aalineRGBA(r, w.first.x, w.first.y, w.second.x, w.second.y, 0, 0, 0, 255);
+        // draw 5x5 connector squares at each end
+        SDL_Rect pin1 = { w.first.x - 2, w.first.y - 2, 5, 5 };
+        SDL_Rect pin2 = { w.second.x - 2, w.second.y - 2, 5, 5 };
+        SDL_RenderFillRect(r, &pin1);
+        SDL_RenderFillRect(r, &pin2);
     }
 }
+
 
 void drawPlacedElements(SDL_Renderer* r) {
     for (auto& e : placedElements) {
@@ -1518,7 +1562,7 @@ int connectorIdCounter = 0;
 
 map<int, string> connectorToNodeName;
 
-int addConnector(SDL_Renderer* renderer, int x, int y) {
+int addConnector(int x, int y) {
     for (const auto& c : allConnectors) {
         if (abs(c.x - x) <= 2 && abs(c.y - y) <= 2) return c.id;
     }
@@ -1531,35 +1575,31 @@ void registerConnectorConnection(int id1, int id2) {
     connectorGraph[id2].push_back(id1);
 }
 
-void extractConnectorsFromPlacedElements(SDL_Renderer* renderer) {
+void extractConnectorsFromPlacedElements() {
     for (auto& e : placedElements) {
         int x1 = e.x - 25, x2 = e.x + 25;
         int y = e.y;
         if (e.type == GROUND) {
-            int id = addConnector(renderer, e.x, e.y);
+            int id = addConnector(e.x, e.y);
         } else {
-            int id1 = addConnector(renderer, x1, y);
-            int id2 = addConnector(renderer, x2, y);
+            int id1 = addConnector(x1, y);
+            int id2 = addConnector(x2, y);
         }
     }
 }
 
-void extractConnectorsFromWires(SDL_Renderer* renderer) {
+void extractConnectorsFromWires() {
+    // For graphical wires only: register endpoints but do NOT electrically connect them
     for (auto& w : wires) {
-        int id1 = addConnector(renderer, w.first.x, w.first.y);
-        int id2 = addConnector(renderer, w.second.x, w.second.y);
-        registerConnectorConnection(id1, id2);
+        addConnector(w.first.x, w.first.y);
+        addConnector(w.second.x, w.second.y);
+        // Skipped registerConnectorConnection to keep wire endpoints as separate nodes
     }
 }
 
-void analyzeNodeConnections(SDL_Renderer* renderer) {
-    extractConnectorsFromPlacedElements(renderer);
-    extractConnectorsFromWires(renderer);
-
-    for (int i = 0; i < allConnectors.size(); ++i) {
-        filledCircleRGBA(renderer, allConnectors[i].x, allConnectors[i].y, 3, 0, 0, 255, 255);
-
-    }
+void analyzeNodeConnections() {
+    extractConnectorsFromPlacedElements();
+    extractConnectorsFromWires();
 
     map<int, int> parent;
     function<int(int)> find = [&](int u) {
@@ -1596,14 +1636,14 @@ void analyzeNodeConnections(SDL_Renderer* renderer) {
     }
 }
 
-vector<string> generateAddCommands(SDL_Renderer* renderer) {
+vector<string> generateAddCommands() {
     vector<string> commands;
     set<string> addedNodes;
 
     for (const auto& c : allConnectors) {
         string nodeName = connectorToNode[c.id];
         if (addedNodes.insert(nodeName).second) {
-            commands.push_back("add node " + nodeName + " " + to_string(c.x) + " " + to_string(c.y));
+            commands.push_back("node " + nodeName + " " + to_string(c.x) + " " + to_string(c.y));
         }
     }
 
@@ -1613,39 +1653,95 @@ vector<string> generateAddCommands(SDL_Renderer* renderer) {
     };
 
     map<ToolType, int> typeCounter;
+    int wireCount = 0; // شمارنده سیم‌ها
 
     for (const auto& e : placedElements) {
-        if (e.type == WIRE) continue;
-        int x1 = e.x - 25, x2 = e.x + 25;
-        int y = e.y;
-        int id1 = (e.type == GROUND) ? addConnector(renderer, e.x, y) : addConnector(renderer, x1, y);
-        int id2 = (e.type == GROUND) ? id1 : addConnector(renderer, x2, y);
+        cout << e.type << endl;
+        if (e.type == WIRE) {
+
+        } else {
+            int x1 = e.x - 25, x2 = e.x + 25;
+            int y = e.y;
+            int id1 = (e.type == GROUND) ? addConnector(e.x, y) : addConnector(x1, y);
+            int id2 = (e.type == GROUND) ? id1 : addConnector(x2, y);
+            string node1 = connectorToNode[id1];
+            string node2 = connectorToNode[id2];
+
+            string name = typeChar[e.type] + to_string(++typeCounter[e.type]);
+            string line;
+            if (e.type == CSOURCE) {
+                line = string(1, typeChar[e.type]) + " " + name + " " + node2;
+                line += " " + node1;
+            } else if (e.type != GROUND) {
+                line = string(1, typeChar[e.type]) + " " + name + " " + node1;
+                line += " " + node2;
+            } else {
+                line = string(1, typeChar[e.type]) + " " + node1;
+            }
+
+            // sample values:
+            if (e.type == RESISTOR) line += " 1000";
+            else if (e.type == CAPACITOR) line += " 1e-6";
+            else if (e.type == INDUCTOR) line += " 0.01";
+            else if (e.type == VSOURCE) line += " 5";
+            else if (e.type == CSOURCE) line += " 0.1";
+
+            commands.push_back(line);
+        }
+    }
+
+    // Add wires as 0-ohm resistors
+    int wireIndex = 1;
+    for (const auto& w : wires) {
+        int id1 = addConnector(w.first.x, w.first.y);
+        int id2 = addConnector(w.second.x, w.second.y);
+
         string node1 = connectorToNode[id1];
         string node2 = connectorToNode[id2];
 
-        string name = typeChar[e.type] + to_string(++typeCounter[e.type]);
-        string line = "add " + string(1, typeChar[e.type]) + " " + name + " " + node1;
-        if (e.type != GROUND) line += " " + node2;
-
-        // sample values:
-        if (e.type == RESISTOR) line += " 1000";
-        else if (e.type == CAPACITOR) line += " 1e-6";
-        else if (e.type == INDUCTOR) line += " 0.01";
-        else if (e.type == VSOURCE) line += " 5";
-        else if (e.type == CSOURCE) line += " 0.1";
-
+        string name = "W" + to_string(wireIndex++);
+        string line = "R " + name + " " + node1 + " " + node2 + " 0";
         commands.push_back(line);
     }
 
     return commands;
 }
 
-void saveCircuitToFile(SDL_Renderer* renderer, const string& filename) {
-    analyzeNodeConnections(renderer);
-    vector<string> cmds = generateAddCommands(renderer);
+
+void saveCircuitToFile(const string& filename) {
+    analyzeNodeConnections();
+    vector<string> cmds = generateAddCommands();
     ofstream out(filename);
     for (const auto& line : cmds) out << line << "\n";
     out.close();
+}
+
+void runCircuit() {
+    circuit.reset();
+
+    string path = "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt";
+    ifstream in(path);
+    if (!in.is_open()) {
+        cerr << "didn't found: " << path << endl;
+        return;
+    }
+
+    vector<string> lines;
+    string line;
+    while (getline(in, line)) {
+        if (!line.empty())
+            lines.push_back(line);
+    }
+    in.close();
+
+    for (const auto& line : lines) {
+        string line2 = "add " + line;
+        inputHandler(line2, circuit);
+    }
+
+    circuit.solveNodalAnalysis();
+
+    cout << "[Run]" << endl;
 }
 
 
@@ -1704,7 +1800,7 @@ int main(int argc, char* argv[]) {
                 cout << "x: " << e.button.x << " y: " << e.button.y << endl;
                 if (hoveringDropdown && showFileMenu) {
                     int option = (my - 30) / 20;
-                    switch(option) {
+                    switch (option) {
                         case 0:
                             // TODO: Implement New File
                             break;
@@ -1712,11 +1808,13 @@ int main(int argc, char* argv[]) {
                             // TODO: Implement Open File
                             break;
                         case 2:
-                            saveCircuitToFile(renderer, "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt");
+                            saveCircuitToFile("C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt");
                             break;
                     }
                     fileClicked = false;
                     showFileMenu = false;
+                } else if (mx >= 130 && mx <= 180 && my >= 0 && my <= 25) {
+                    runCircuit();
                 } else if (my >= 25 && my <= 75) {
                     if (mx >= 30 && mx <= 60) currentTool = RESISTOR;
                     else if (mx >= 90 && mx <= 120) currentTool = CAPACITOR;
@@ -1733,16 +1831,65 @@ int main(int argc, char* argv[]) {
                 } else if (my > 75) {
                     if (currentTool == WIRE) {
                         if (!wireStartSelected) {
-                            wireX1 = mx; wireY1 = my;
+                            // Snap start of wire to nearest connector
+                            int sx = mx, sy = my;
+                            for (auto& c : allConnectors) {
+                                if (abs(sx - c.x) <= 2 && abs(sy - c.y) <= 2) {
+                                    sx = c.x; sy = c.y;
+                                    break;
+                                }
+                            }
+                            wireX1 = sx; wireY1 = sy;
                             wireStartSelected = true;
                         } else {
-                            wires.push_back({{wireX1, wireY1}, {mx, my}});
+                            // Snap end of wire to nearest connector
+                            int ex = mx, ey = my;
+                            for (auto& c : allConnectors) {
+                                if (abs(ex - c.x) <= 2 && abs(ey - c.y) <= 2) {
+                                    ex = c.x; ey = c.y;
+                                    break;
+                                }
+                            }
+                            wires.push_back({{wireX1, wireY1}, {ex, ey}});
                             wireStartSelected = false;
                             currentTool = NONE;
                             showPreview = false;
                         }
                     } else if (currentTool != NONE) {
-                        placedElements.push_back({currentTool, mx, my});
+
+                        // Snap element end if near existing connector
+                        int cx = mx, cy = my;
+                        // For two-ended elements except GND
+                        if (currentTool != GROUND && currentTool != WIRE) {
+                            for (const auto& c : allConnectors) {
+                                // left end of element at cx-25, cy
+                                if (abs((cx - 25) - c.x) <= 2 && abs(cy - c.y) <= 2) {
+                                    // snap left end to connector
+                                    cx = c.x + 25;
+                                    cy = c.y;
+                                    break;
+                                }
+                                // right end at cx+25, cy
+                                if (abs((cx + 25) - c.x) <= 2 && abs(cy - c.y) <= 2) {
+                                    // snap right end to connector
+                                    cx = c.x - 25;
+                                    cy = c.y;
+                                    break;
+                                }
+                            }
+                        } else if (currentTool == GROUND) {
+                            // single-ended: snap center if near connector
+                            for (const auto& c : allConnectors) {
+                                if (abs(cx - c.x) <= 2 && abs(cy - c.y) <= 2) {
+                                    cx = c.x;
+                                    cy = c.y;
+                                    break;
+                                }
+                            }
+                        }
+                        // ask for value and place element at snapped position
+//                        double val = promptValueGUI(window, renderer, currentTool);
+                        placedElements.push_back({ currentTool, cx, cy, "", 10 });
                         currentTool = NONE;
                         showPreview = false;
                     }
@@ -1758,7 +1905,7 @@ int main(int argc, char* argv[]) {
         if (showFileMenu) drawFileDropdown(renderer, font);
         if (showPreview) drawPreviewElement(renderer, preX, preY);
 
-        analyzeNodeConnections(renderer);
+        analyzeNodeConnections();
 
         drawWires(renderer, wires);
 
