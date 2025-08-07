@@ -1640,6 +1640,7 @@ vector<string> generateAddCommands() {
     vector<string> commands;
     set<string> addedNodes;
 
+    // 1) خروجی گره‌ها با مختصات (مثل قبل)
     for (const auto& c : allConnectors) {
         string nodeName = connectorToNode[c.id];
         if (addedNodes.insert(nodeName).second) {
@@ -1647,53 +1648,63 @@ vector<string> generateAddCommands() {
         }
     }
 
+    // 2) نگاشت نوع به حرف و شمارندهٔ نام خودکار (مثل قبل)
     map<ToolType, char> typeChar = {
             {RESISTOR, 'R'}, {CAPACITOR, 'C'}, {INDUCTOR, 'L'},
             {VSOURCE, 'V'}, {CSOURCE, 'I'}, {GROUND, 'G'}
     };
-
     map<ToolType, int> typeCounter;
-    int wireCount = 0; // شمارنده سیم‌ها
 
+    // (اختیاری: لاگ مثل قبل)
+    // int wireCount = 0;
+
+    // 3) المنت‌ها
     for (const auto& e : placedElements) {
         cout << e.type << endl;
+
+        // مثل قبل: wireها را اینجا رد می‌کنیم و پایین به‌صورت R=0 اضافه می‌کنیم
         if (e.type == WIRE) {
-
-        } else {
-            int x1 = e.x - 25, x2 = e.x + 25;
-            int y = e.y;
-            int id1 = (e.type == GROUND) ? addConnector(e.x, y) : addConnector(x1, y);
-            int id2 = (e.type == GROUND) ? id1 : addConnector(x2, y);
-            string node1 = connectorToNode[id1];
-            string node2 = connectorToNode[id2];
-
-            string name = typeChar[e.type] + to_string(++typeCounter[e.type]);
-            string line;
-            if (e.type == CSOURCE) {
-                line = string(1, typeChar[e.type]) + " " + name + " " + node2;
-                line += " " + node1;
-            } else if (e.type != GROUND) {
-                line = string(1, typeChar[e.type]) + " " + name + " " + node1;
-                line += " " + node2;
-            } else {
-                line = string(1, typeChar[e.type]) + " " + node1;
-            }
-
-            // sample values:
-            if (e.type == RESISTOR) line += " 1000";
-            else if (e.type == CAPACITOR) line += " 1e-6";
-            else if (e.type == INDUCTOR) line += " 0.01";
-            else if (e.type == VSOURCE) line += " 5";
-            else if (e.type == CSOURCE) line += " 0.1";
-
-            commands.push_back(line);
+            continue;
         }
+
+        int x1 = e.x - 25, x2 = e.x + 25;
+        int y  = e.y;
+
+        // مثل قبل: کانکتور چپ/راست (یا تک نقطه برای GROUND)
+        int id1 = (e.type == GROUND) ? addConnector(e.x, y) : addConnector(x1, y);
+        int id2 = (e.type == GROUND) ? id1            : addConnector(x2, y);
+
+        string node1 = connectorToNode[id1];
+        string node2 = connectorToNode[id2];
+
+        // نام: اگر کاربر نام داده از همان استفاده؛ وگرنه مثل قبل خودکار بساز
+        string name = e.name;
+        if (name.empty()) {
+            name = string(1, typeChar[e.type]) + to_string(++typeCounter[e.type]);
+        }
+
+        // مقدار واقعی به‌جای نمونه مقادیر
+        string valStr = to_string(e.value);
+
+        string line;
+        if (e.type == CSOURCE) {
+            // حفظ استثنا: I <name> node2 node1 <value>
+            line = string(1, typeChar[e.type]) + string(" ") + name + " " + node2 + " " + node1 + " " + valStr;
+        } else if (e.type != GROUND) {
+            // R/C/L/V: <char> <name> node1 node2 <value>
+            line = string(1, typeChar[e.type]) + string(" ") + name + " " + node1 + " " + node2 + " " + valStr;
+        } else {
+            // GND مثل قبل فقط با یک نود
+            line = string(1, typeChar[e.type]) + string(" ") + node1;
+        }
+
+        commands.push_back(line);
     }
 
-    // Add wires as 0-ohm resistors
+    // 4) سیم‌ها مثل قبل: R Wi node1 node2 0
     int wireIndex = 1;
     for (const auto& w : wires) {
-        int id1 = addConnector(w.first.x, w.first.y);
+        int id1 = addConnector(w.first.x,  w.first.y);
         int id2 = addConnector(w.second.x, w.second.y);
 
         string node1 = connectorToNode[id1];
@@ -1716,7 +1727,10 @@ void saveCircuitToFile(const string& filename) {
     out.close();
 }
 
+bool isGroundPlaced = false;
+
 void runCircuit() {
+    if (!isGroundPlaced) return;
     circuit.reset();
 
     string path = "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt";
@@ -1766,6 +1780,22 @@ int main(int argc, char* argv[]) {
     bool showPreview = false;
     int preX, preY;
 
+    bool showValueDialog = false;
+    ToolType selectedToolForDialog = NONE;
+    string inputValueText = "";
+    SDL_Rect valueDialogRect = { 400, 300, 300, 120 };
+    double pendingValue = 0.0;   // مقدار بعد از OK
+    bool   hasPendingValue = false;
+
+    // ===== Dialog state (add these) =====
+    enum DialogField { FIELD_NAME, FIELD_VALUE };
+    DialogField dialogFocus = FIELD_NAME;  // فوکوس اول روی نام
+
+    string inputNameText = "";        // ورودی نام
+
+    string pendingName;               // نام تایید شده بعد از OK
+    bool hasPendingName = false;    // فلگ در دسترس بودن نام
+
     SDL_Event e;
     bool quit = false;
 
@@ -1798,6 +1828,54 @@ int main(int argc, char* argv[]) {
                 }
             } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
                 cout << "x: " << e.button.x << " y: " << e.button.y << endl;
+
+                if (showValueDialog) {
+                    // نواحی قابل کلیک داخل دیالوگ
+                    SDL_Rect okButton = {valueDialogRect.x + 100, valueDialogRect.y + 80, 100, 30};
+                    SDL_Rect nameBox  = {valueDialogRect.x + 60,  valueDialogRect.y + 8,  valueDialogRect.w - 70, 28};
+                    SDL_Rect valBox   = {valueDialogRect.x + 60,  valueDialogRect.y + 38, valueDialogRect.w - 70, 28};
+
+                    // اگر روی OK کلیک شد
+                    if (e.button.x >= okButton.x && e.button.x <= okButton.x + okButton.w &&
+                        e.button.y >= okButton.y && e.button.y <= okButton.y + okButton.h) {
+                        try {
+                            if (inputNameText.empty()) throw std::runtime_error("empty name");
+                            double val = parseNumber(inputValueText);  // k/u/m/e… پشتیبانی می‌شود
+
+                            pendingValue = val;
+                            hasPendingValue = true;
+                            pendingName = inputNameText;
+                            hasPendingName = true;
+
+                            showValueDialog = false;
+                            SDL_StopTextInput();
+
+                            currentTool = selectedToolForDialog;
+                            selectedToolForDialog = NONE;
+                            showPreview = true;
+
+                            continue; // جلوگیری از نفوذ این کلیک به بقیه‌ی هندلرها
+                        } catch (...) {
+                            std::cout << "Invalid name/value!" << std::endl;
+                        }
+                        continue;
+                    }
+
+                    if (e.button.x >= nameBox.x && e.button.x <= nameBox.x + nameBox.w &&
+                        e.button.y >= nameBox.y && e.button.y <= nameBox.y + nameBox.h) {
+                        dialogFocus = FIELD_NAME;
+                        continue;
+                    }
+                    if (e.button.x >= valBox.x && e.button.x <= valBox.x + valBox.w &&
+                        e.button.y >= valBox.y && e.button.y <= valBox.y + valBox.h) {
+                        dialogFocus = FIELD_VALUE;
+                        continue;
+                    }
+
+                    continue;
+                }
+
+
                 if (hoveringDropdown && showFileMenu) {
                     int option = (my - 30) / 20;
                     switch (option) {
@@ -1824,9 +1902,18 @@ int main(int argc, char* argv[]) {
                     else if (mx >= 330 && mx <= 360) currentTool = GROUND;
                     else if (mx >= 390 && mx <= 420) currentTool = WIRE;
 
-                    if (mx >= 30 && mx <= 360) {
-                        preX = 0; preY = 0;
-                        showPreview = true;
+                    // محدوده‌ی ابزارهای غیر از GROUND/WIRE: 30..330
+                    if (mx >= 30 && mx <= 330) {
+                        if (currentTool != GROUND && currentTool != WIRE) {
+                            selectedToolForDialog = currentTool;
+                            currentTool = NONE;
+                            showValueDialog = true;
+
+                            inputNameText.clear();             // ← نام خالی
+                            inputValueText.clear();            // ← مقدار خالی
+                            dialogFocus = FIELD_NAME;          // ← فوکوس ابتدا روی نام
+                            SDL_StartTextInput();              // ← شروع دریافت ورودی متن
+                        }
                     }
                 } else if (my > 75) {
                     if (currentTool == WIRE) {
@@ -1878,6 +1965,7 @@ int main(int argc, char* argv[]) {
                                 }
                             }
                         } else if (currentTool == GROUND) {
+                            isGroundPlaced = true;
                             // single-ended: snap center if near connector
                             for (const auto& c : allConnectors) {
                                 if (abs(cx - c.x) <= 2 && abs(cy - c.y) <= 2) {
@@ -1888,13 +1976,72 @@ int main(int argc, char* argv[]) {
                             }
                         }
                         // ask for value and place element at snapped position
-//                        double val = promptValueGUI(window, renderer, currentTool);
-                        placedElements.push_back({ currentTool, cx, cy, "", 10 });
+
+                        double val = hasPendingValue ? pendingValue : 10.0;
+                        std::string nm = (hasPendingName ? pendingName : std::string(""));
+
+                        placedElements.push_back({ currentTool, cx, cy, nm, val });
+
+                        hasPendingValue = false;
+                        pendingValue = 0.0;
+                        hasPendingName = false;
+                        pendingName.clear();
+
                         currentTool = NONE;
                         showPreview = false;
                     }
                 }
+            } else if (showValueDialog) {
+                if (e.type == SDL_TEXTINPUT) {
+                    const char* txt = e.text.text;
+                    if (dialogFocus == FIELD_NAME) {
+                        // فقط حروف/عدد/زیرخط برای نام (سلیقه‌ای)
+                        for (const char* p = txt; *p; ++p) {
+                            char ch = *p;
+                            if (std::isalnum((unsigned char)ch) || ch == '_') {
+                                inputNameText.push_back(ch);
+                            }
+                        }
+                    } else { // FIELD_VALUE
+                        // کاراکترهای رایج مقدار: اعداد، اعشار، منفی، e/E و prefixed (k,m,u,n,M,K)
+                        for (const char* p = txt; *p; ++p) {
+                            char ch = *p;
+                            if (std::isdigit((unsigned char)ch) || ch=='.' || ch=='-' || ch=='e' || ch=='E' ||
+                                ch=='k'||ch=='K'||ch=='m'||ch=='u'||ch=='U'||ch=='n'||ch=='M') {
+                                inputValueText.push_back(ch);
+                            }
+                        }
+                    }
+                } else if (e.type == SDL_KEYDOWN) {
+                    if (e.key.keysym.sym == SDLK_TAB) {
+                        dialogFocus = (dialogFocus == FIELD_NAME) ? FIELD_VALUE : FIELD_NAME;
+                    } else if (e.key.keysym.sym == SDLK_BACKSPACE) {
+                        std::string &target = (dialogFocus == FIELD_NAME) ? inputNameText : inputValueText;
+                        if (!target.empty()) target.pop_back();
+                    } else if (e.key.keysym.sym == SDLK_RETURN) {
+                        try {
+                            if (inputNameText.empty()) throw std::runtime_error("empty name");
+                            double val = parseNumber(inputValueText);
+                            pendingValue = val;
+                            hasPendingValue = true;
+                            pendingName = inputNameText;
+                            hasPendingName = true;
+
+                            showValueDialog = false;
+                            SDL_StopTextInput();
+                            currentTool = selectedToolForDialog;
+                            selectedToolForDialog = NONE;
+                            showPreview = true;
+                        } catch (...) {
+                            std::cout << "Invalid name/value!" << std::endl;
+                        }
+                    } else if (e.key.keysym.sym == SDLK_ESCAPE) {
+                        showValueDialog = false;
+                        SDL_StopTextInput();
+                    }
+                }
             }
+
         }
 
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
@@ -1904,6 +2051,102 @@ int main(int argc, char* argv[]) {
         drawPlacedElements(renderer);
         if (showFileMenu) drawFileDropdown(renderer, font);
         if (showPreview) drawPreviewElement(renderer, preX, preY);
+
+        if (showValueDialog) {
+            // پس‌زمینه دیالوگ
+            SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
+            SDL_RenderFillRect(renderer, &valueDialogRect);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(renderer, &valueDialogRect);
+
+            SDL_Color black = {0, 0, 0};
+
+            // ===== Labels =====
+            SDL_Surface* nameLbl = TTF_RenderText_Solid(font, "Name:", black);
+            if (nameLbl) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, nameLbl);
+                if (tex) {
+                    SDL_Rect r = {valueDialogRect.x + 10, valueDialogRect.y + 12, nameLbl->w, nameLbl->h};
+                    SDL_RenderCopy(renderer, tex, nullptr, &r);
+                    SDL_DestroyTexture(tex);
+                }
+                SDL_FreeSurface(nameLbl);
+            }
+
+            SDL_Surface* valLbl = TTF_RenderText_Solid(font, "Value:", black);
+            if (valLbl) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, valLbl);
+                if (tex) {
+                    SDL_Rect r = {valueDialogRect.x + 10, valueDialogRect.y + 42, valLbl->w, valLbl->h};
+                    SDL_RenderCopy(renderer, tex, nullptr, &r);
+                    SDL_DestroyTexture(tex);
+                }
+                SDL_FreeSurface(valLbl);
+            }
+
+            // ===== Name box =====
+            SDL_Rect nameBox = {valueDialogRect.x + 60, valueDialogRect.y + 8, valueDialogRect.w - 70, 28};
+            // پرکردن داخل
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+            SDL_RenderFillRect(renderer, &nameBox);
+            // کادر (پررنگ‌تر اگر فوکوس)
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(renderer, &nameBox);
+            if (dialogFocus == FIELD_NAME) SDL_RenderDrawRect(renderer, &nameBox);
+
+            const char* nameToShow = inputNameText.empty() ? "e.g. R1" : inputNameText.c_str();
+            SDL_Surface* nameSurf = TTF_RenderText_Solid(font, nameToShow, black);
+            if (nameSurf) {
+                SDL_Texture* nameTex = SDL_CreateTextureFromSurface(renderer, nameSurf);
+                if (nameTex) {
+                    SDL_Rect r = {nameBox.x + 6, nameBox.y + 6, nameSurf->w, nameSurf->h};
+                    SDL_RenderCopy(renderer, nameTex, nullptr, &r);
+                    SDL_DestroyTexture(nameTex);
+                }
+                SDL_FreeSurface(nameSurf);
+            }
+
+            // ===== Value box =====
+            SDL_Rect valBox = {valueDialogRect.x + 60, valueDialogRect.y + 38, valueDialogRect.w - 70, 28};
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+            SDL_RenderFillRect(renderer, &valBox);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(renderer, &valBox);
+            if (dialogFocus == FIELD_VALUE) SDL_RenderDrawRect(renderer, &valBox);
+
+            const char* valToShow = inputValueText.empty() ? "e.g. 1k, 10u, 0.1" : inputValueText.c_str();
+            SDL_Surface* valSurf = TTF_RenderText_Solid(font, valToShow, black);
+            if (valSurf) {
+                SDL_Texture* valTex = SDL_CreateTextureFromSurface(renderer, valSurf);
+                if (valTex) {
+                    SDL_Rect r = {valBox.x + 6, valBox.y + 6, valSurf->w, valSurf->h};
+                    SDL_RenderCopy(renderer, valTex, nullptr, &r);
+                    SDL_DestroyTexture(valTex);
+                }
+                SDL_FreeSurface(valSurf);
+            }
+
+            // ===== OK button =====
+            SDL_Rect okButton = {valueDialogRect.x + 100, valueDialogRect.y + 80, 100, 30};
+            SDL_SetRenderDrawColor(renderer, 180, 180, 180, 255);
+            SDL_RenderFillRect(renderer, &okButton);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(renderer, &okButton);
+
+            SDL_Surface* okSurf = TTF_RenderText_Solid(font, "OK", black);
+            if (okSurf) {
+                SDL_Texture* okTex = SDL_CreateTextureFromSurface(renderer, okSurf);
+                if (okTex) {
+                    SDL_Rect r = {okButton.x + (okButton.w - okSurf->w)/2, okButton.y + (okButton.h - okSurf->h)/2, okSurf->w, okSurf->h};
+                    SDL_RenderCopy(renderer, okTex, nullptr, &r);
+                    SDL_DestroyTexture(okTex);
+                }
+                SDL_FreeSurface(okSurf);
+            }
+        }
+
+
+
 
         analyzeNodeConnections();
 
