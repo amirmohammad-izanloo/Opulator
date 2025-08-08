@@ -1854,6 +1854,9 @@ int main(int argc, char* argv[]) {
                             selectedToolForDialog = NONE;
                             showPreview = true;
 
+                            preX = 548;
+                            preY = 395;
+
                             continue; // جلوگیری از نفوذ این کلیک به بقیه‌ی هندلرها
                         } catch (...) {
                             std::cout << "Invalid name/value!" << std::endl;
