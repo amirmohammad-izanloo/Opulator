@@ -91,6 +91,16 @@ string extractFileName(const string &filePath) {
     else
         return filePath;
 }
+// ===== Wave storage =====
+struct WaveStore {
+    std::vector<double> t;                        // time (s)
+    std::map<std::string, std::vector<double>> V; // node voltages
+    std::map<std::string, std::vector<double>> I; // element currents (optional)
+    void clear(){ t.clear(); V.clear(); I.clear(); }
+};
+
+WaveStore gWaves;
+
 
 //================ Gaussian Elimination Function =================
 
@@ -325,7 +335,9 @@ public:
         totalSteps = steps;
     }
 
-   void solveNodalAnalysis() {
+    bool computeNodalVoltages(std::map<std::string,double>& outV) const;
+
+    void solveNodalAnalysis() {
         bool foundGround = false;
         for (auto node : nodes) {
             if (node->getName() == groundName) { foundGround = true; break; }
@@ -434,51 +446,51 @@ public:
             cout << p.first << " = " << voltages[p.second] << " V" << endl;
     }
 
-    void simulateTransient() {
+    // قبلیِ اشتباه داخل کلاس:
+// void simulateTransientCapture(Circuit& circuit, WaveStore& ws) {
+
+    void simulateTransientCapture(WaveStore& ws) {
+        ws.clear();
+
+        // از اینجا به بعد هرجا گفتی circuit، بکنش this->
         bool foundGround = false;
-        for (auto node : nodes)
-            if (node->getName() == groundName) { foundGround = true; break; }
-        if (!foundGround)
-            throw NoGroundException();
+        for (auto node : this->nodes)
+            if (node->getName() == this->groundName) { foundGround = true; break; }
+        if (!foundGround) throw NoGroundException();
 
-        vector<Node*> unknownNodes;
-        for (auto node : nodes)
-            if (node->getName() != groundName)
+        std::vector<Node*> unknownNodes;
+        for (auto node : this->nodes)
+            if (node->getName() != this->groundName)
                 unknownNodes.push_back(node);
-        int n = unknownNodes.size();
-        if (n == 0) {
-            cout << "No unknown nodes." << endl;
-            return;
-        }
-        map<string, int> nodeIndex;
-        for (int i = 0; i < n; ++i)
-            nodeIndex[unknownNodes[i]->getName()] = i;
-        map<string, double> prevVoltages;
-        for (auto node : unknownNodes)
-            prevVoltages[node->getName()] = 0.0;
+        int n = (int)unknownNodes.size();
+        if (n == 0) return;
 
-        // Static map to hold inductor currents (companion model state)
-        static map<string, double> inductorCurrents;
+        std::map<std::string,int> nodeIndex;
+        for (int i = 0; i < n; ++i) nodeIndex[unknownNodes[i]->getName()] = i;
 
-        cout << "--- Transient Simulation Start ---" << endl;
-        for (int step = 0; step < totalSteps; ++step) {
-            double time = step * timeStep;
-            vector<vector<double>> A(n, vector<double>(n, 0.0));
-            vector<double> b(n, 0.0);
-            // Stamp each circuit element
-            for (auto elem : elements) {
-                string na = elem->getNode1()->getName();
-                string nb = elem->getNode2()->getName();
-                int i = (na != groundName) ? nodeIndex[na] : -1;
-                int j = (nb != groundName) ? nodeIndex[nb] : -1;
+        std::map<std::string,double> prevVoltages;
+        for (auto node : unknownNodes) prevVoltages[node->getName()] = 0.0;
+
+        static std::map<std::string,double> inductorCurrents;
+        for (auto &kv : inductorCurrents) kv.second = 0.0;
+
+        for (int step = 0; step < this->totalSteps; ++step) {
+            double time = step * this->timeStep;
+
+            std::vector<std::vector<double>> A(n, std::vector<double>(n, 0.0));
+            std::vector<double> b(n, 0.0);
+
+            for (auto elem : this->elements) {
+                std::string na = elem->getNode1()->getName();
+                std::string nb = elem->getNode2()->getName();
+                int i = (na != this->groundName) ? nodeIndex[na] : -1;
+                int j = (nb != this->groundName) ? nodeIndex[nb] : -1;
+
                 if (elem->getType() == "Resistor") {
                     double g = 1.0 / elem->getValue();
                     if (i != -1) A[i][i] += g;
                     if (j != -1) A[j][j] += g;
-                    if (i != -1 && j != -1) {
-                        A[i][j] -= g;
-                        A[j][i] -= g;
-                    }
+                    if (i != -1 && j != -1) { A[i][j] -= g; A[j][i] -= g; }
                 }
                 else if (elem->getType() == "CurrentSource") {
                     double I = elem->getValue();
@@ -487,273 +499,66 @@ public:
                 }
                 else if (elem->getType() == "Capacitor") {
                     double C = elem->getValue();
-                    double G = C / timeStep; // Equivalent conductance
+                    double G = C / this->timeStep;
                     double v_prev_a = (i != -1) ? prevVoltages[na] : 0.0;
                     double v_prev_b = (j != -1) ? prevVoltages[nb] : 0.0;
                     double Ieq = G * (v_prev_a - v_prev_b);
-                    if (i != -1) {
-                        A[i][i] += G;
-                        b[i] += Ieq;
-                    }
-                    if (j != -1) {
-                        A[j][j] += G;
-                        b[j] -= Ieq;
-                    }
-                    if (i != -1 && j != -1) {
-                        A[i][j] -= G;
-                        A[j][i] -= G;
-                    }
+                    if (i != -1) { A[i][i] += G; b[i] += Ieq; }
+                    if (j != -1) { A[j][j] += G; b[j] -= Ieq; }
+                    if (i != -1 && j != -1) { A[i][j] -= G; A[j][i] -= G; }
                 }
                 else if (elem->getType() == "Inductor") {
-                    // Companion model for inductors using the backward Euler method.
                     double L = elem->getValue();
-                    double G_ind = timeStep / L;
-                    string indName = elem->getName();
-                    if (inductorCurrents.find(indName) == inductorCurrents.end())
-                        inductorCurrents[indName] = 0.0; // Initial current = 0
+                    double G_ind = this->timeStep / L;
+                    std::string indName = elem->getName();
+                    if (!inductorCurrents.count(indName)) inductorCurrents[indName] = 0.0;
                     double I_prev = inductorCurrents[indName];
-                    if (i != -1) {
-                        A[i][i] += G_ind;
-                        b[i] -= I_prev;
-                    }
-                    if (j != -1) {
-                        A[j][j] += G_ind;
-                        b[j] += I_prev;
-                    }
-                    if (i != -1 && j != -1) {
-                        A[i][j] -= G_ind;
-                        A[j][i] -= G_ind;
-                    }
+                    if (i != -1) { A[i][i] += G_ind; b[i] -= I_prev; }
+                    if (j != -1) { A[j][j] += G_ind; b[j] += I_prev; }
+                    if (i != -1 && j != -1) { A[i][j] -= G_ind; A[j][i] -= G_ind; }
                 }
                 else if (elem->getType() == "VoltageSource") {
-                    VoltageSource* vs = dynamic_cast<VoltageSource*>(elem);
+                    auto* vs = dynamic_cast<VoltageSource*>(elem);
                     if (!vs) continue;
                     double V = vs->getValue();
-                    if (vs->isSine)
-                        V = V + vs->amplitude * sin(2 * M_PI * vs->frequency * time);
+                    if (vs->isSine) V = V + vs->amplitude * sin(2*M_PI*vs->frequency*time);
                     const double G_big = 1e6;
-                    if (na == groundName && j != -1) {
-                        A[j][j] += G_big;
-                        b[j] -= V * G_big;
-                    } else if (nb == groundName && i != -1) {
-                        A[i][i] += G_big;
-                        b[i] += V * G_big;
-                    } else if (i != -1 && j != -1) {
-                        cout << "Skipping VS " << vs->getName() << " (not grounded)" << endl;
-                    }
+                    if (na == this->groundName && j != -1) { A[j][j] += G_big; b[j] -= V*G_big; }
+                    else if (nb == this->groundName && i != -1) { A[i][i] += G_big; b[i] += V*G_big; }
                 }
             }
 
-            vector<double> x = gaussianElimination(A, b);
+            std::vector<double> x = gaussianElimination(A, b);
 
-            // Update inductor currents based on the newly computed node voltages.
-            for (auto elem : elements) {
+            for (auto elem : this->elements) {
                 if (elem->getType() == "Inductor") {
-                    string na = elem->getNode1()->getName();
-                    string nb = elem->getNode2()->getName();
-                    int i = (na != groundName) ? nodeIndex[na] : -1;
-                    int j = (nb != groundName) ? nodeIndex[nb] : -1;
+                    std::string na = elem->getNode1()->getName();
+                    std::string nb = elem->getNode2()->getName();
+                    int i = (na != this->groundName) ? nodeIndex[na] : -1;
+                    int j = (nb != this->groundName) ? nodeIndex[nb] : -1;
                     double V_ind = 0.0;
                     if (i != -1) V_ind += x[i];
                     if (j != -1) V_ind -= x[j];
-                    double G_ind = timeStep / elem->getValue();
-                    string indName = elem->getName();
+                    double G_ind = this->timeStep / elem->getValue();
+                    std::string indName = elem->getName();
                     inductorCurrents[indName] = inductorCurrents[indName] + G_ind * V_ind;
                 }
             }
-            cout << "t = " << time << " s: ";
+
+            ws.t.push_back(time);
             for (int k = 0; k < n; ++k) {
-                string nodeName = unknownNodes[k]->getName();
-                double v = x[k];
-                prevVoltages[nodeName] = v;
-                cout << nodeName << " = " << v << " V  ";
+                std::string nodeName = unknownNodes[k]->getName();
+                ws.V[nodeName].push_back(x[k]);
+                prevVoltages[nodeName] = x[k];
             }
-            cout << endl;
+            // در صورت نیاز ws.I[...] را هم اینجا پر کن
         }
-        cout << "--- Transient Simulation Done ---" << endl;
     }
 
-    void simulateTransientWithCurrents() {
-        bool foundGround = false;
-        for (auto node : nodes)
-            if (node->getName() == groundName) { foundGround = true; break; }
-        if (!foundGround)
-            throw NoGroundException();
 
-        vector<Node*> unknownNodes;
-        for (auto node : nodes)
-            if (node->getName() != groundName)
-                unknownNodes.push_back(node);
 
-        int n = unknownNodes.size();
-        if (n == 0) {
-            cout << "No unknown nodes." << endl;
-            return;
-        }
 
-        map<string, int> nodeIndex;
-        for (int i = 0; i < n; ++i)
-            nodeIndex[unknownNodes[i]->getName()] = i;
 
-        map<string, double> prevVoltages;
-        for (auto node : unknownNodes)
-            prevVoltages[node->getName()] = 0.0;
-
-        static map<string, double> inductorCurrents;
-
-        cout << "--- Transient Simulation with Currents ---" << endl;
-
-        for (int step = 0; step < totalSteps; ++step) {
-            double time = step * timeStep;
-            vector<vector<double>> A(n, vector<double>(n, 0.0));
-            vector<double> b(n, 0.0);
-
-            for (auto elem : elements) {
-                string na = elem->getNode1()->getName();
-                string nb = elem->getNode2()->getName();
-                int i = (na != groundName) ? nodeIndex[na] : -1;
-                int j = (nb != groundName) ? nodeIndex[nb] : -1;
-
-                if (elem->getType() == "Resistor") {
-                    double g = 1.0 / elem->getValue();
-                    if (i != -1) A[i][i] += g;
-                    if (j != -1) A[j][j] += g;
-                    if (i != -1 && j != -1) {
-                        A[i][j] -= g;
-                        A[j][i] -= g;
-                    }
-                } else if (elem->getType() == "CurrentSource") {
-                    double I = elem->getValue();
-                    if (i != -1) b[i] += I;
-                    if (j != -1) b[j] -= I;
-                } else if (elem->getType() == "Capacitor") {
-                    double C = elem->getValue();
-                    double G = C / timeStep;
-                    double v_prev_a = (i != -1) ? prevVoltages[na] : 0.0;
-                    double v_prev_b = (j != -1) ? prevVoltages[nb] : 0.0;
-                    double Ieq = G * (v_prev_a - v_prev_b);
-
-                    if (i != -1) {
-                        A[i][i] += G;
-                        b[i] += Ieq;
-                    }
-                    if (j != -1) {
-                        A[j][j] += G;
-                        b[j] -= Ieq;
-                    }
-                    if (i != -1 && j != -1) {
-                        A[i][j] -= G;
-                        A[j][i] -= G;
-                    }
-                } else if (elem->getType() == "Inductor") {
-                    double L = elem->getValue();
-                    double G_ind = timeStep / L;
-                    string indName = elem->getName();
-                    if (inductorCurrents.find(indName) == inductorCurrents.end())
-                        inductorCurrents[indName] = 0.0;
-                    double I_prev = inductorCurrents[indName];
-
-                    if (i != -1) {
-                        A[i][i] += G_ind;
-                        b[i] -= I_prev;
-                    }
-                    if (j != -1) {
-                        A[j][j] += G_ind;
-                        b[j] += I_prev;
-                    }
-                    if (i != -1 && j != -1) {
-                        A[i][j] -= G_ind;
-                        A[j][i] -= G_ind;
-                    }
-                } else if (elem->getType() == "VoltageSource") {
-                    VoltageSource* vs = dynamic_cast<VoltageSource*>(elem);
-                    if (!vs) continue;
-                    double V = vs->getValue();
-                    if (vs->isSine)
-                        V += vs->amplitude * sin(2 * M_PI * vs->frequency * time);
-                    const double G_big = 1e6;
-                    if (na == groundName && j != -1) {
-                        A[j][j] += G_big;
-                        b[j] -= V * G_big;
-                    } else if (nb == groundName && i != -1) {
-                        A[i][i] += G_big;
-                        b[i] += V * G_big;
-                    } else if (i != -1 && j != -1) {
-                        A[i][i] += G_big;
-                        A[j][j] += G_big;
-                        A[i][j] -= G_big;
-                        A[j][i] -= G_big;
-                        b[i] += V * G_big;
-                        b[j] -= V * G_big;
-                    }
-                }
-            }
-
-            vector<double> x = gaussianElimination(A, b);
-
-            // به‌روزرسانی جریان سلف‌ها
-            for (auto elem : elements) {
-                if (elem->getType() == "Inductor") {
-                    string na = elem->getNode1()->getName();
-                    string nb = elem->getNode2()->getName();
-                    int i = (na != groundName) ? nodeIndex[na] : -1;
-                    int j = (nb != groundName) ? nodeIndex[nb] : -1;
-                    double V_ind = 0.0;
-                    if (i != -1) V_ind += x[i];
-                    if (j != -1) V_ind -= x[j];
-                    double G_ind = timeStep / elem->getValue();
-                    string indName = elem->getName();
-                    inductorCurrents[indName] += G_ind * V_ind;
-                }
-            }
-
-            // ذخیره ولتاژها برای گام بعدی
-            map<string, double> newVoltages;
-            for (int k = 0; k < n; ++k) {
-                newVoltages[unknownNodes[k]->getName()] = x[k];
-            }
-
-            cout << fixed << setprecision(6);
-            cout << "t = " << time << " s:\n";
-
-            for (int k = 0; k < n; ++k) {
-                string nodeName = unknownNodes[k]->getName();
-                cout << "  V(" << nodeName << ") = " << x[k] << " V\n";
-            }
-
-            for (auto elem : elements) {
-                string na = elem->getNode1()->getName();
-                string nb = elem->getNode2()->getName();
-                double v_a = (na != groundName) ? newVoltages[na] : 0.0;
-                double v_b = (nb != groundName) ? newVoltages[nb] : 0.0;
-                double v_prev_a = (prevVoltages.count(na) ? prevVoltages[na] : 0.0);
-                double v_prev_b = (prevVoltages.count(nb) ? prevVoltages[nb] : 0.0);
-                double current = 0.0;
-
-                if (elem->getType() == "Resistor") {
-                    current = (v_a - v_b) / elem->getValue();
-                } else if (elem->getType() == "Capacitor") {
-                    double C = elem->getValue();
-                    double dv = (v_a - v_b) - (v_prev_a - v_prev_b);
-                    current = C * dv / timeStep;
-                } else if (elem->getType() == "Inductor") {
-                    current = inductorCurrents[elem->getName()];
-                } else if (elem->getType() == "CurrentSource") {
-                    current = elem->getValue();
-                } else if (elem->getType() == "VoltageSource") {
-                    current = NAN; // یا صرفاً چاپ نکنیم
-                }
-
-                if (!isnan(current))
-                    cout << "  I(" << elem->getName() << ") = " << current << " A\n";
-            }
-
-            cout << endl;
-            prevVoltages = newVoltages;
-        }
-
-        cout << "--- Transient Simulation with Currents Done ---" << endl;
-    }
 
     // ------------------------- Ground ------------------------------
 
@@ -776,7 +581,269 @@ public:
         return groundName;
     }
 
+
+    bool computeDCOP(std::map<std::string,double>& outV,
+                      std::map<std::string,double>& outI) const;
+
+
+
 };
+
+// هر چیزی با R <= 1e-9 را «سیم» حساب کنیم
+inline bool isWireResistor(const Element* e) {
+    if (auto r = dynamic_cast<const Resistor*>(e)) {
+        return r->getValue() <= 1e-9 + 1e-15;
+    }
+    return false;
+}
+
+// فرمت خروجی؛ پیش‌فرض 6 رقم بعد اعشار
+inline string fmt6(double x) {
+    ostringstream oss;
+    oss << fixed << setprecision(6) << x;
+    return oss.str();
+}
+
+string formatWithSI(double value, const char* unit = "") {
+    if (!std::isfinite(value)) return "N/A";
+
+    static const struct { const char* pfx; double mul; } prefixes[] = {
+            {"G", 1e9}, {"M", 1e6}, {"k", 1e3}, {"", 1.0},
+            {"m", 1e-3}, {"u", 1e-6}, {"n", 1e-9}, {"p", 1e-12}
+    };
+
+    double av = std::fabs(value);
+    const char* pfx = "";
+    double mul = 1.0;
+
+    for (auto& t : prefixes) {
+        if (av >= t.mul || (t.mul == 1e-12 && av < t.mul)) {
+            pfx = t.pfx; mul = t.mul;
+            break;
+        }
+    }
+
+    double scaled = value / mul;
+
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(6) << scaled;
+    std::string s = oss.str();
+
+    // حذف صفرهای اضافی انتها
+    if (s.find('.') != std::string::npos) {
+        while (!s.empty() && s.back() == '0') s.pop_back();
+        if (!s.empty() && s.back() == '.') s.pop_back();
+    }
+
+    s += pfx;
+    if (unit && unit[0]) s += unit;
+    return s;
+}
+
+bool Circuit::computeDCOP(std::map<std::string,double>& outV,
+                          std::map<std::string,double>& outI) const {
+    // وجود گراند
+    bool foundGround = false;
+    for (auto node : nodes)
+        if (node->getName() == groundName) { foundGround = true; break; }
+    if (!foundGround) throw NoGroundException();
+
+    // لیست گره‌های مجهول (به‌جز زمین)
+    std::vector<Node*> unknown;
+    for (auto node : nodes)
+        if (node->getName() != groundName) unknown.push_back(node);
+
+    int n = (int)unknown.size();
+    outV.clear(); outI.clear();
+    if (n == 0) return true;
+
+    // ایندکس‌گذاری گره‌ها
+    std::map<std::string,int> idx;
+    for (int i=0;i<n;++i) idx[unknown[i]->getName()] = i;
+
+    // ماتریس Ax=b هم‌سبکِ solveNodalAnalysis
+    std::vector<std::vector<double>> A(n, std::vector<double>(n, 0.0));
+    std::vector<double> b(n, 0.0);
+
+    for (auto elem : elements) {
+        // Resistor
+        if (auto* r = dynamic_cast<Resistor*>(elem)) {
+            double R = r->getValue(); if (R <= 1e-9) R = 1e-9;
+            double g = 1.0 / R;
+            std::string a = r->getNode1()->getName();
+            std::string c = r->getNode2()->getName();
+            bool ia = (a != groundName), ic = (c != groundName);
+            if (ia && ic) { int i = idx[a], j = idx[c]; A[i][i]+=g; A[j][j]+=g; A[i][j]-=g; A[j][i]-=g; }
+            else if (!ia && ic) { int j = idx[c]; A[j][j]+=g; }
+            else if (ia && !ic) { int i = idx[a]; A[i][i]+=g; }
+            continue;
+        }
+        // Voltage source (روش هدایت بزرگ)
+        if (auto* vs = dynamic_cast<VoltageSource*>(elem)) {
+            double V = vs->getValue();               // DC offset
+            const double G_big = 1e6;
+            std::string a = vs->getNode1()->getName();
+            std::string c = vs->getNode2()->getName();
+            if (a == groundName && c != groundName) { int j = idx[c]; A[j][j]+=G_big; b[j] -= V*G_big; }
+            else if (c == groundName && a != groundName) { int i = idx[a]; A[i][i]+=G_big; b[i] += V*G_big; }
+            // در غیر این صورت فعلاً رها
+            continue;
+        }
+        // Inductor (در DC: اتصال کوتاه معادل → هدایت بزرگ به زمین اگر یک سر به زمینه)
+        if (auto* ind = dynamic_cast<Inductor*>(elem)) {
+            const double G_big = 1e6;
+            std::string a = ind->getNode1()->getName();
+            std::string c = ind->getNode2()->getName();
+            if (a == groundName && c != groundName) { int j = idx[c]; A[j][j]+=G_big; }
+            else if (c == groundName && a != groundName) { int i = idx[a]; A[i][i]+=G_big; }
+            continue;
+        }
+        // Current source
+        if (auto* cs = dynamic_cast<CurrentSource*>(elem)) {
+            double I = cs->getValue();
+            std::string a = cs->getNode1()->getName();
+            std::string c = cs->getNode2()->getName();
+            if (a != groundName && c != groundName) { b[idx[a]] += I; b[idx[c]] -= I; }
+            else if (a == groundName && c != groundName) { b[idx[c]] -= I; }
+            else if (c == groundName && a != groundName) { b[idx[a]] += I; }
+            continue;
+        }
+        // Capacitor در DC بازمدار است → اثری روی A ندارد
+    }
+
+    // حل
+    std::vector<double> x = gaussianElimination(A, b);
+
+    // ولتاژها
+    for (auto& kv : idx) outV[kv.first] = x[kv.second];
+
+    // جریان هر المان (تعریف مثبت از n1→n2)
+    using std::numeric_limits;
+    double NaN = numeric_limits<double>::quiet_NaN();
+
+    for (auto elem : elements) {
+        if (isWireResistor(elem)) {
+            continue;
+        }
+        std::string name = elem->getName();
+        std::string a = elem->getNode1()->getName();
+        std::string c = elem->getNode2()->getName();
+        double Va = (a == groundName) ? 0.0 : outV[a];
+        double Vc = (c == groundName) ? 0.0 : outV[c];
+
+        if (dynamic_cast<Resistor*>(elem)) {
+            double R = elem->getValue(); if (R <= 1e-9) R = 1e-9;
+            outI[name] = (Va - Vc) / R;
+        } else if (dynamic_cast<CurrentSource*>(elem)) {
+            outI[name] = elem->getValue();
+        } else if (dynamic_cast<Capacitor*>(elem)) {
+            outI[name] = 0.0;
+        } else if (dynamic_cast<Inductor*>(elem)) {
+            outI[name] = NaN; // DC ایده‌آل نامشخص
+        } else if (dynamic_cast<VoltageSource*>(elem)) {
+            outI[name] = NaN; // بدون MNA درنمیاد
+        } else {
+            outI[name] = NaN;
+        }
+    }
+
+    return true;
+}
+
+
+bool Circuit::computeNodalVoltages(std::map<std::string,double>& outV) const {
+    // همان منطق solveNodalAnalysis، ولی بدون چاپ و برگرداندن map
+    bool foundGround = false;
+    for (auto node : nodes) {
+        if (node->getName() == groundName) { foundGround = true; break; }
+    }
+    if (!foundGround) throw NoGroundException();
+
+    std::vector<Node*> unknownNodes;
+    for (auto node : nodes)
+        if (node->getName() != groundName)
+            unknownNodes.push_back(node);
+
+    int n = (int)unknownNodes.size();
+    if (n == 0) { outV.clear(); return true; }
+
+    std::map<std::string,int> nodeIndex;
+    for (int i = 0; i < n; ++i)
+        nodeIndex[unknownNodes[i]->getName()] = i;
+
+    std::vector<std::vector<double>> A(n, std::vector<double>(n, 0.0));
+    std::vector<double> b(n, 0.0);
+
+    for (auto elem : elements) {
+        // Resistor
+        if (auto* r = dynamic_cast<Resistor*>(elem)) {
+            double R = r->getValue();
+            if (R <= 1e-9) R = 1e-9;
+            double g = 1.0 / R;
+            std::string a = r->getNode1()->getName();
+            std::string bnode = r->getNode2()->getName();
+            if (a != groundName && bnode != groundName) {
+                int i = nodeIndex[a], j = nodeIndex[bnode];
+                A[i][i] += g; A[j][j] += g; A[i][j] -= g; A[j][i] -= g;
+            } else if (a == groundName && bnode != groundName) {
+                int j = nodeIndex[bnode]; A[j][j] += g;
+            } else if (bnode == groundName && a != groundName) {
+                int i = nodeIndex[a]; A[i][i] += g;
+            }
+            continue;
+        }
+        // VoltageSource (روش هدایت بزرگ)
+        if (auto* vs = dynamic_cast<VoltageSource*>(elem)) {
+            double V = vs->getValue(); // برای DC: offset
+            const double G_big = 1e6;
+            std::string a = vs->getNode1()->getName();
+            std::string bnode = vs->getNode2()->getName();
+            if (a == groundName && bnode != groundName) {
+                int j = nodeIndex[bnode]; A[j][j] += G_big; b[j] -= V * G_big;
+            } else if (bnode == groundName && a != groundName) {
+                int i = nodeIndex[a]; A[i][i] += G_big; b[i] += V * G_big;
+            } else {
+                // رفرنس زمین ندارد → از نظر DC ساده، صرف‌نظر (همان هشدار نسخهٔ چاپی)
+            }
+            continue;
+        }
+        // Inductor → در DC معادل اتصال کوتاه (با G_big)
+        if (auto* ind = dynamic_cast<Inductor*>(elem)) {
+            const double G_big = 1e6;
+            std::string a = ind->getNode1()->getName();
+            std::string bnode = ind->getNode2()->getName();
+            if (a == groundName && bnode != groundName) {
+                int j = nodeIndex[bnode]; A[j][j] += G_big;
+            } else if (bnode == groundName && a != groundName) {
+                int i = nodeIndex[a]; A[i][i] += G_big;
+            } else {
+                // ممکنه تکینگی بده؛ اینجا چیزی اضافه نمی‌کنیم (مثل هشدار قبلی)
+            }
+            continue;
+        }
+        // CurrentSource
+        if (auto* cs = dynamic_cast<CurrentSource*>(elem)) {
+            double I = cs->getValue();
+            std::string a = cs->getNode1()->getName();
+            std::string bnode = cs->getNode2()->getName();
+            if (a != groundName && bnode != groundName) {
+                b[nodeIndex[a]] += I;
+                b[nodeIndex[bnode]] -= I;
+            } else if (a == groundName && bnode != groundName) {
+                b[nodeIndex[bnode]] -= I;
+            } else if (bnode == groundName && a != groundName) {
+                b[nodeIndex[a]] += I;
+            }
+            continue;
+        }
+    }
+
+    std::vector<double> x = gaussianElimination(A, b);
+    outV.clear();
+    for (auto &kv : nodeIndex) outV[kv.first] = x[kv.second];
+    return true;
+}
+
 
 Circuit circuit;
 int menuLevel = 0;
@@ -789,8 +856,8 @@ void loadNewFile(const string &filePath) {
     }
 
     bool exists = false;
-    ifstream schList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
-
+    // ifstream schList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
+    ifstream schList("C:\\\\Users\\\\Informatic Iran\\\\Desktop\\\\opu_savedfiles\\\\thelist.txt");
     string line;
     while (getline(schList, line)) {
         if (line == filePath) {
@@ -802,7 +869,8 @@ void loadNewFile(const string &filePath) {
 
     infile.close();
     if (!exists) {
-        ofstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt", ios::app);
+        // ofstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt", ios::app);
+        ofstream schematicsList("C:\\\\Users\\\\Informatic Iran\\\\Desktop\\\\opu_savedfiles\\\\thelist.txt", ios::app);
         schematicsList << filePath << endl;
         schematicsList.close();
     }
@@ -812,7 +880,8 @@ void loadNewFile(const string &filePath) {
 
 void showSchematicsMenu() {
     gSchematics.clear();
-    ifstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
+    ///ifstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
+    ifstream schematicsList("C:\\\\Users\\\\Informatic Iran\\\\Desktop\\\\opu_savedfiles\\\\thelist.txt");
     string schematicPath;
     while(getline(schematicsList, schematicPath)) {
         ifstream infile(schematicPath);
@@ -849,7 +918,7 @@ void showSchematicsMenu() {
 vector<string> parseCommandLine(const string &cmd) {
     vector<string> tokens;
     smatch match;
-menuLevel = 2;
+    menuLevel = 2;
     if (menuLevel == 0 ) {
 
         // NewFile command: "NewFile <file_path>"
@@ -1155,13 +1224,13 @@ void inputHandler(const string &input, Circuit &circuit) {
     }
     else if (action == "transient") {
         if (circuit.getGroundName() != "")
-            circuit.simulateTransient(); // tokens[1] = ground node name
+            circuit.simulateTransientCapture(gWaves); // tokens[1] = ground node name
         else
             cout << "ERROR: Missing ground node in 'transient' command.\n";
     }
     else if (action == "transient_currents") {
         if (circuit.getGroundName() != "")
-            circuit.simulateTransientWithCurrents();
+            circuit.simulateTransientCapture(gWaves);
         else
             cout << "ERROR: Missing ground node.\n";
     }
@@ -1184,7 +1253,7 @@ void inputHandler(const string &input, Circuit &circuit) {
     }
     else if (action == "analyze") {
         cout << circuit.groundName << endl;
-            circuit.solveNodalAnalysis();
+        circuit.solveNodalAnalysis();
     }
     else if (action == ".step") {
         if (tokens.size() >= 3) {
@@ -1324,6 +1393,17 @@ struct PlacedElement {
 vector<PlacedElement> placedElements;
 ToolType currentTool = NONE;
 
+// --- Grid & Snap settings ---
+// --- Grid & Snap settings ---
+static const int GRID_SPACING     = 10;  // فاصله شبکه (px)
+static const int GRID_DOT_SIZE    = 1;   // اندازه نقطه خاکستری
+static const int SNAP_BOX_HALF    = 5;   // ناحیه جذب
+static const int ELEMENT_HALF_LEN = 30;  // نیم‌طول بدنه (مضرب 10)
+static const int PIN_STUB         = 10;  // طول استاب پین
+
+const int PIN_OFFSET = ELEMENT_HALF_LEN + PIN_STUB; // = 40
+
+
 
 void drawConnector(SDL_Renderer* r, int x, int y) {
     SDL_Rect pin = {x - 2, y - 2, 5, 5};
@@ -1331,11 +1411,16 @@ void drawConnector(SDL_Renderer* r, int x, int y) {
 }
 
 void drawWireEnds(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
-    SDL_RenderDrawLine(r, x1 - 10, y1, x1, y1);
-    SDL_RenderDrawLine(r, x2, y2, x2 + 10, y2);
-    drawConnector(r, x1 - 10, y1);
-    drawConnector(r, x2 + 10, y2);
+    // x1 و x2 = سرهای بدنه
+    SDL_RenderDrawLine(r, x1 - PIN_STUB, y1, x1, y1);
+    SDL_RenderDrawLine(r, x2, y2, x2 + PIN_STUB, y2);
+
+    SDL_Rect pin1 = { (x1 - PIN_STUB) - 2, y1 - 2, 5, 5 };
+    SDL_Rect pin2 = { (x2 + PIN_STUB) - 2, y2 - 2, 5, 5 };
+    SDL_RenderFillRect(r, &pin1);
+    SDL_RenderFillRect(r, &pin2);
 }
+
 
 void drawMenuBar(SDL_Renderer* renderer, TTF_Font* font) {
     SDL_Rect menuBar = {0, 0, 1280, 25};
@@ -1463,9 +1548,6 @@ void drawCurrentSource(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
     filledTrigonRGBA(r, xTip, yTip, baseLeftX, baseLeftY, baseRightX, baseRightY, 0, 0, 0, 255);
 }
 
-
-
-
 void drawGround(SDL_Renderer* r, int x, int y) {
     SDL_RenderDrawLine(r, x, y, x, y + 8);
     SDL_RenderDrawLine(r, x - 6, y + 8, x + 6, y + 8);
@@ -1512,38 +1594,37 @@ void drawWires(SDL_Renderer* r, const vector<pair<SDL_Point, SDL_Point>>& wires)
 
 void drawPlacedElements(SDL_Renderer* r) {
     for (auto& e : placedElements) {
-        int x1 = e.x - 15, y1 = e.y;
-        int x2 = e.x + 15, y2 = e.y;
+        int x1 = e.x - ELEMENT_HALF_LEN, y1 = e.y;
+        int x2 = e.x + ELEMENT_HALF_LEN, y2 = e.y;
         switch (e.type) {
-            case RESISTOR: drawResistor(r, x1, y1, x2, y2); break;
+            case RESISTOR:  drawResistor(r, x1, y1, x2, y2); break;
             case CAPACITOR: drawCapacitor(r, x1, y1, x2, y2); break;
-            case INDUCTOR: drawInductor(r, x1, y1, x2, y2); break;
-            case VSOURCE: drawVoltageSource(r, x1, y1, x2, y2); break;
-            case CSOURCE: drawCurrentSource(r, x1, y1, x2, y2); break;
-            case GROUND: drawGround(r, e.x, e.y); break;
+            case INDUCTOR:  drawInductor(r, x1, y1, x2, y2); break;
+            case VSOURCE:   drawVoltageSource(r, x1, y1, x2, y2); break;
+            case CSOURCE:   drawCurrentSource(r, x1, y1, x2, y2); break;
+            case GROUND:    drawGround(r, e.x, e.y); break;
             default: break;
         }
     }
 }
 
+
 void drawPreviewElement(SDL_Renderer* r, int preX, int preY) {
-
-    int previewX = preX, previewY = preY;
-
     if (currentTool == NONE) return;
-    int x1 = previewX - 15, y1 = previewY;
-    int x2 = previewX + 15, y2 = previewY;
+    int x1 = preX - ELEMENT_HALF_LEN, y1 = preY;
+    int x2 = preX + ELEMENT_HALF_LEN, y2 = preY;
 
     switch (currentTool) {
-        case RESISTOR: drawResistor(r, x1, y1, x2, y2); break;
+        case RESISTOR:  drawResistor(r, x1, y1, x2, y2); break;
         case CAPACITOR: drawCapacitor(r, x1, y1, x2, y2); break;
-        case INDUCTOR: drawInductor(r, x1, y1, x2, y2); break;
-        case VSOURCE: drawVoltageSource(r, x1, y1, x2, y2); break;
-        case CSOURCE: drawCurrentSource(r, x1, y1, x2, y2); break;
-        case GROUND: drawGround(r, previewX, previewY); break;
+        case INDUCTOR:  drawInductor(r, x1, y1, x2, y2); break;
+        case VSOURCE:   drawVoltageSource(r, x1, y1, x2, y2); break;
+        case CSOURCE:   drawCurrentSource(r, x1, y1, x2, y2); break;
+        case GROUND:    drawGround(r, preX, preY); break;
         default: break;
     }
 }
+
 
 
 // ===================== Connectors ========================
@@ -1577,22 +1658,27 @@ void registerConnectorConnection(int id1, int id2) {
 
 void extractConnectorsFromPlacedElements() {
     for (auto& e : placedElements) {
-        int x1 = e.x - 25, x2 = e.x + 25;
-        int y = e.y;
         if (e.type == GROUND) {
-            int id = addConnector(e.x, e.y);
+            addConnector(e.x, e.y);
         } else {
-            int id1 = addConnector(x1, y);
-            int id2 = addConnector(x2, y);
+            // پین واقعی = بدنه ± (ELEMENT_HALF_LEN) به‌علاوه استاب پین
+            int xL = e.x - PIN_OFFSET;
+            int xR = e.x + PIN_OFFSET;
+            int y  = e.y;
+            addConnector(xL, y);
+            addConnector(xR, y);
         }
     }
 }
 
+
+
 void extractConnectorsFromWires() {
     // For graphical wires only: register endpoints but do NOT electrically connect them
     for (auto& w : wires) {
-        addConnector(w.first.x, w.first.y);
-        addConnector(w.second.x, w.second.y);
+        int id1 = addConnector(w.first.x, w.first.y);
+        int id2 = addConnector(w.second.x, w.second.y);
+        registerConnectorConnection(id1, id2);
         // Skipped registerConnectorConnection to keep wire endpoints as separate nodes
     }
 }
@@ -1667,8 +1753,10 @@ vector<string> generateAddCommands() {
             continue;
         }
 
-        int x1 = e.x - 25, x2 = e.x + 25;
+        int x1 = e.x - (ELEMENT_HALF_LEN + PIN_STUB); // = e.x - 40
+        int x2 = e.x + (ELEMENT_HALF_LEN + PIN_STUB); // = e.x + 40
         int y  = e.y;
+
 
         // مثل قبل: کانکتور چپ/راست (یا تک نقطه برای GROUND)
         int id1 = (e.type == GROUND) ? addConnector(e.x, y) : addConnector(x1, y);
@@ -1729,44 +1817,287 @@ void saveCircuitToFile(const string& filename) {
 
 bool isGroundPlaced = false;
 
+
+void showDCOPWindow(const std::map<std::string,double>& Vmap,
+                    const std::map<std::string,double>& Imap,
+                    const std::string& gndName) {
+    SDL_Window* w = SDL_CreateWindow("DC Operating Point",
+                                     SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                     760, 520, SDL_WINDOW_SHOWN);
+    SDL_Renderer* r = SDL_CreateRenderer(w, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    TTF_Font* f = TTF_OpenFont("C:\\Windows\\Fonts\\Arial.ttf", 14);
+
+    auto drawText = [&](const std::string& s, int x, int y){
+        if (!f) return;
+        SDL_Color black{0,0,0};
+        SDL_Surface* surf = TTF_RenderText_Solid(f, s.c_str(), black);
+        if (!surf) return;
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(r, surf);
+        SDL_Rect dst{ x, y, surf->w, surf->h };
+        SDL_RenderCopy(r, tex, nullptr, &dst);
+        SDL_DestroyTexture(tex); SDL_FreeSurface(surf);
+    };
+
+    // مرتب‌سازی برای نمایش منظم
+    std::vector<std::pair<std::string,double>> nodes(Vmap.begin(), Vmap.end());
+    std::sort(nodes.begin(), nodes.end(), [](auto& a, auto& b){ return a.first < b.first; });
+
+    std::vector<std::pair<std::string,double>> elems(Imap.begin(), Imap.end());
+    std::sort(elems.begin(), elems.end(), [](auto& a, auto& b){ return a.first < b.first; });
+
+    bool quit=false; SDL_Event e; int scrollL=0, scrollR=0; const int pad = 16;
+
+    while(!quit){
+        while(SDL_PollEvent(&e)){
+            if(e.type==SDL_QUIT) quit=true;
+            else if(e.type==SDL_KEYDOWN && e.key.keysym.sym==SDLK_ESCAPE) quit=true;
+            else if(e.type==SDL_MOUSEWHEEL){
+                // شیفت = اسکرول ستون راست
+                if ((SDL_GetModState() & KMOD_SHIFT) != 0) scrollR += (e.wheel.y>0? 20 : -20);
+                else                                       scrollL += (e.wheel.y>0? 20 : -20);
+            }
+        }
+
+        int W,H; SDL_GetWindowSize(w,&W,&H);
+        SDL_SetRenderDrawColor(r,255,255,255,255); SDL_RenderClear(r);
+
+        // عنوان
+        drawText("DC Operating Point", pad, 8);
+        drawText("(Ground = " + gndName + ")", pad+180, 8);
+
+        // جداکنندهٔ عمودی وسط
+        int midX = W/2;
+        SDL_SetRenderDrawColor(r, 0,0,0,255);
+        SDL_RenderDrawLine(r, midX, 40, midX, H-20);
+
+        // ستون چپ: Node Voltages
+        drawText("Node", pad, 40);
+        drawText("Voltage (V)", pad+140, 40);
+        SDL_RenderDrawLine(r, pad, 60, midX - pad, 60);
+
+        int yL = 70 + scrollL;
+        for (auto& kv : nodes) {
+            if (kv.first == gndName) continue; // 0V
+            drawText(kv.first, pad, yL);
+            drawText(formatWithSI(kv.second, "V"), pad + 140, yL);
+            yL += 22;
+        }
+
+// ستون راست: Element Currents
+        drawText("Element", midX + pad, 40);
+        drawText("Current (A)", midX + pad + 160, 40);
+        SDL_RenderDrawLine(r, midX + pad, 60, W - pad, 60);
+
+        int yR = 70 + scrollR;
+        for (auto& kv : elems) {
+            const std::string& ename = kv.first;
+            double Iraw = kv.second;
+
+            bool isNaN = std::isnan(Iraw);
+            drawText(ename, midX + pad, yR);
+            drawText(isNaN ? "N/A" : formatWithSI(Iraw, "A"), midX + pad + 160, yR);
+            yR += 22;
+        }
+
+        SDL_RenderPresent(r);
+    }
+
+    if (f) TTF_CloseFont(f);
+    SDL_DestroyRenderer(r);
+    SDL_DestroyWindow(w);
+}
+
+
 void runCircuit() {
     if (!isGroundPlaced) return;
     circuit.reset();
 
-    string path = "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt";
+    std::string path = "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt";
     ifstream in(path);
-    if (!in.is_open()) {
-        cerr << "didn't found: " << path << endl;
-        return;
-    }
+    if (!in.is_open()) { cerr << "didn't found: " << path << endl; return; }
 
-    vector<string> lines;
-    string line;
-    while (getline(in, line)) {
-        if (!line.empty())
-            lines.push_back(line);
-    }
+    std::vector<std::string> lines; std::string line;
+    while (getline(in, line)) { if (!line.empty()) lines.push_back(line); }
     in.close();
 
-    for (const auto& line : lines) {
-        string line2 = "add " + line;
+    for (const auto& l : lines) {
+        std::string line2 = "add " + l;
         inputHandler(line2, circuit);
     }
 
-    circuit.solveNodalAnalysis();
+    // --- جدید: محاسبه و نمایش DC‑OP (ولتاژها + جریان‌ها در یک پنجره) ---
+    try {
+        std::map<std::string,double> Vmap, Imap;
+        circuit.computeDCOP(Vmap, Imap);
 
-    cout << "[Run]" << endl;
+        // چاپ ترمینال (اختیاری)
+        std::cout << "\nNodal Voltages (ground " << circuit.groundName << " = 0 V):\n";
+        for (auto& kv : Vmap) std::cout << kv.first << " = " << kv.second << " V\n";
+        std::cout << "\nElement Currents (A) [positive n1->n2]:\n";
+        for (auto& kv : Imap) {
+            if (std::isnan(kv.second)) std::cout << kv.first << " = N/A\n";
+            else                        std::cout << kv.first << " = " << kv.second << " A\n";
+        }
+
+        showDCOPWindow(Vmap, Imap, circuit.groundName);
+    } catch (const std::exception& ex) {
+        std::cout << ex.what() << std::endl;
+        return;
+    }
+
+    std::cout << "[Run]" << std::endl;
 }
 
+
+// ===== Run dialog state =====
+bool showRunDialog = false;
+
+enum RunChoice { RUN_DC, RUN_VT, RUN_IT };
+RunChoice runChoice = RUN_DC;
+
+std::string runNodeName = "";   // برای V–t
+std::string runElemName = "";   // برای I–t
+
+enum RunField { RF_NONE, RF_NODE, RF_ELEM };
+RunField runFocus = RF_NONE;
+
+SDL_Rect runDialogRect = { 360, 180, 560, 200 }; // جای دیالوگ Run
+
+// اعلان توابع نمایش سیگنال
+void showSignalVT(const std::vector<double>& t,
+                  const std::vector<double>& y,
+                  const std::string& title,
+                  const std::string& yLabel);
+void showNodeVoltageVT(const WaveStore& ws, const std::string& nodeName);
+void showElementCurrentIT(const WaveStore& ws, const std::string& elemName);
+
+// اگر هنوز simulateTransientCapture نداری، تابعش در بخش 2 آمده.
+void showSignalVT(const std::vector<double>& t,
+                  const std::vector<double>& y,
+                  const std::string& title,
+                  const std::string& yLabel) {
+    if (t.empty() || y.empty() || t.size() != y.size()) return;
+
+    SDL_Window* w = SDL_CreateWindow(title.c_str(),
+                                     SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 900, 480, SDL_WINDOW_SHOWN);
+    SDL_Renderer* r = SDL_CreateRenderer(w, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    TTF_Font* font2 = TTF_OpenFont("C:\\Windows\\Fonts\\Arial.ttf", 14);
+
+    double tMin = t.front(), tMax = t.back();
+    double yMin = y[0], yMax = y[0];
+    for (size_t i = 1; i < y.size(); ++i) { yMin = std::min(yMin, y[i]); yMax = std::max(yMax, y[i]); }
+    if (fabs(yMax - yMin) < 1e-12) { yMax = yMin + 1.0; }
+
+    auto X = [&](double tt, int W, int pad){ return pad + int((tt - tMin) * (W - 2*pad) / (tMax - tMin)); };
+    auto Y = [&](double yy, int H, int pad){ return H - pad - int((yy - yMin) * (H - 2*pad) / (yMax - yMin)); };
+
+    bool quit = false;
+    SDL_Event e;
+    const int pad = 50;
+
+    auto drawText = [&](const std::string& s, int x, int yPos){
+        if (!font2) return;
+        SDL_Color black = {0,0,0};
+        SDL_Surface* surf = TTF_RenderText_Solid(font2, s.c_str(), black);
+        if (!surf) return;
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(r, surf);
+        SDL_Rect dst = {x, yPos, surf->w, surf->h};
+        SDL_RenderCopy(r, tex, nullptr, &dst);
+        SDL_DestroyTexture(tex); SDL_FreeSurface(surf);
+    };
+
+    while (!quit) {
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT) quit = true;
+            else if (e.type == SDL_KEYDOWN && (e.key.keysym.sym == SDLK_ESCAPE)) quit = true;
+        }
+
+        int W, H; SDL_GetWindowSize(w, &W, &H);
+        SDL_SetRenderDrawColor(r, 255, 255, 255, 255); SDL_RenderClear(r);
+
+        // axes
+        SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
+        SDL_RenderDrawLine(r, pad, H - pad, W - pad, H - pad); // t-axis
+        SDL_RenderDrawLine(r, pad, pad,     pad,     H - pad); // y-axis
+
+        drawText("t (s)", W - pad - 40, H - pad + 8);
+        drawText(yLabel, 10, 10);
+        drawText(title, W/2 - 80, 10);
+
+        // line
+        for (size_t i = 1; i < t.size(); ++i) {
+            int x1 = X(t[i-1], W, pad), y1 = Y(y[i-1], H, pad);
+            int x2 = X(t[i],   W, pad), y2 = Y(y[i],   H, pad);
+            SDL_RenderDrawLine(r, x1, y1, x2, y2);
+        }
+
+        SDL_RenderPresent(r);
+    }
+
+    if (font2) TTF_CloseFont(font2);
+    SDL_DestroyRenderer(r);
+    SDL_DestroyWindow(w);
+}
+
+void showNodeVoltageVT(const WaveStore& ws, const std::string& nodeName) {
+    auto it = ws.V.find(nodeName);
+    if (it == ws.V.end()) return;
+    showSignalVT(ws.t, it->second, "V(" + nodeName + ") vs t", "V (V)");
+}
+
+void showElementCurrentIT(const WaveStore& ws, const std::string& elemName) {
+    auto it = ws.I.find(elemName);
+    if (it == ws.I.end()) return;
+    showSignalVT(ws.t, it->second, "I(" + elemName + ") vs t", "I (A)");
+}
+
+
+
+
+// گرد کردن به نزدیک‌ترین گره شبکه
+inline void snapToGrid(int x, int y, int& gx, int& gy) {
+    gx = (int)std::round((double)x / GRID_SPACING) * GRID_SPACING;
+    gy = (int)std::round((double)y / GRID_SPACING) * GRID_SPACING;
+}
+
+// اولویت: کانکتورهای موجود → شبکه
+inline void snapPointWithConnectorsFirst(int x, int y, int& outX, int& outY) {
+    // 1) اگر نزدیک کانکتور موجود باشیم، به همان اسنپ کن
+    for (const auto& c : allConnectors) {
+        if (std::abs(x - c.x) <= SNAP_BOX_HALF && std::abs(y - c.y) <= SNAP_BOX_HALF) {
+            outX = c.x; outY = c.y;
+            return;
+        }
+    }
+    // 2) در غیر اینصورت، به شبکه اسنپ کن (در محدوده جذب 10x10)
+    int gx, gy; snapToGrid(x, y, gx, gy);
+    if (std::abs(x - gx) <= SNAP_BOX_HALF && std::abs(y - gy) <= SNAP_BOX_HALF) {
+        outX = gx; outY = gy;
+    } else {
+        // خارج محدوده جذب: اجازه نده روی بوم چیزی گذاشته شود (می‌تونی به نقطه خام برگردونی)
+        outX = gx; outY = gy; // پیشنهاد: همچنان به نزدیک‌ترین گره بچسبانیم
+    }
+}
+
+inline void drawGrid(SDL_Renderer* r, int W, int H) {
+    SDL_SetRenderDrawColor(r, 220, 220, 220, 255); // خاکستری روشن
+    for (int y = 0; y <= H; y += GRID_SPACING) {
+        for (int x = 0; x <= W; x += GRID_SPACING) {
+            SDL_Rect dot = { x - GRID_DOT_SIZE/2, y - GRID_DOT_SIZE/2, GRID_DOT_SIZE, GRID_DOT_SIZE };
+            SDL_RenderFillRect(r, &dot);
+        }
+    }
+}
 
 //================ Main Function =============================
 int main(int argc, char* argv[]) {
     SDL_Init(SDL_INIT_VIDEO);
     TTF_Init();
-    SDL_Window* window = SDL_CreateWindow("Circuit Visualizer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_SHOWN);
+    SDL_Window* window = SDL_CreateWindow("Opulator Spice", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, SDL_WINDOW_SHOWN);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     TTF_Font* font = TTF_OpenFont("C:\\Windows\\Fonts\\Arial.ttf", 14);
 
+    int winW, winH; SDL_GetWindowSize(window, &winW, &winH);
 
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderClear(renderer);
@@ -1816,18 +2147,77 @@ int main(int argc, char* argv[]) {
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) {
                 quit = true;
-            } else if (e.type == SDL_MOUSEMOTION) {
+            }
+            else if (e.type == SDL_MOUSEMOTION) {
                 showFileMenu = hoveringFile || (hoveringDropdown && fileClicked);
 
                 if (currentTool != NONE && e.motion.y > 75) {
-                    preX = e.motion.x;
-                    preY = e.motion.y;
+                    int sx, sy;
+                    snapPointWithConnectorsFirst(e.motion.x, e.motion.y, sx, sy);
+                    preX = sx; preY = sy;
                     showPreview = true;
-                } else {
+
+                }
+
+                else {
                     showPreview = false;
                 }
-            } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+            }
+            else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
                 cout << "x: " << e.button.x << " y: " << e.button.y << endl;
+                // --- RUN DIALOG CLICK HANDLER ---
+                if (showRunDialog) {
+                    SDL_Rect okBtn     = {runDialogRect.x + runDialogRect.w - 200, runDialogRect.y + runDialogRect.h - 40, 80, 28};
+                    SDL_Rect cancelBtn = {okBtn.x + 100, okBtn.y, 80, 28};
+                    SDL_Rect rbDC      = {runDialogRect.x + 20,  runDialogRect.y + 20,  18, 18};
+                    //  SDL_Rect rbVT      = {runDialogRect.x + 20,  runDialogRect.y + 60,  18, 18};
+                    // SDL_Rect rbIT      = {runDialogRect.x + 20,  runDialogRect.y + 100, 18, 18};
+                    // SDL_Rect nodeBox   = {runDialogRect.x + 180, runDialogRect.y + 55,  runDialogRect.w - 200, 28};
+                    // SDL_Rect elemBox   = {runDialogRect.x + 180, runDialogRect.y + 95,  runDialogRect.w - 200, 28};
+
+                    auto inRect = [&](SDL_Rect r)->bool{
+                        return e.button.x >= r.x && e.button.x <= r.x + r.w &&
+                               e.button.y >= r.y && e.button.y <= r.y + r.h;
+                    };
+
+                    // OK
+                    if (inRect(okBtn)) {
+                        SDL_StopTextInput();
+                        if (runChoice == RUN_DC) {
+                            showRunDialog = false;
+                            runCircuit(); // همان اجرای DC قبلی
+                        } else if (runChoice == RUN_VT) {
+                            std::string node = runNodeName.empty()? "n1" : runNodeName;
+                            showRunDialog = false;
+                            circuit.simulateTransientCapture(gWaves);
+                            showNodeVoltageVT(gWaves, node);
+                        } else { // RUN_IT
+                            std::string elem = runElemName.empty()? "R1" : runElemName;
+                            showRunDialog = false;
+                            circuit.simulateTransientCapture(gWaves);
+                            showElementCurrentIT(gWaves, elem);
+                        }
+                        continue; // کلیک به UI زیر نفوذ نکند
+                    }
+
+                    // Cancel
+                    if (inRect(cancelBtn)) { showRunDialog = false; SDL_StopTextInput(); continue; }
+
+                    // انتخاب نوع تحلیل
+                    if (inRect(rbDC))  { runChoice = RUN_DC;  runFocus = RF_NONE;                continue; }
+                    //   if (inRect(rbVT))  { runChoice = RUN_VT;  runFocus = RF_NODE; SDL_StartTextInput(); continue; }
+                    // if (inRect(rbIT))  { runChoice = RUN_IT;  runFocus = RF_ELEM; SDL_StartTextInput(); continue; }
+
+                    // فوکوس فیلدها
+                    // if (inRect(nodeBox)) { runChoice = RUN_VT; runFocus = RF_NODE; SDL_StartTextInput(); continue; }
+                    // if (inRect(elemBox)) { runChoice = RUN_IT; runFocus = RF_ELEM; SDL_StartTextInput(); continue; }
+
+                    // کلیک بیرون از دیالوگ → نادیده بگیر
+                    if (!(e.button.x >= runDialogRect.x && e.button.x <= runDialogRect.x + runDialogRect.w &&
+                          e.button.y >= runDialogRect.y && e.button.y <= runDialogRect.y + runDialogRect.h)) {
+                        continue;
+                    }
+                }
 
                 if (showValueDialog) {
                     // نواحی قابل کلیک داخل دیالوگ
@@ -1842,6 +2232,9 @@ int main(int argc, char* argv[]) {
                             if (inputNameText.empty()) throw std::runtime_error("empty name");
                             double val = parseNumber(inputValueText);  // k/u/m/e… پشتیبانی می‌شود
 
+                            preX = 545;
+                            preY = 347;
+
                             pendingValue = val;
                             hasPendingValue = true;
                             pendingName = inputNameText;
@@ -1853,9 +2246,6 @@ int main(int argc, char* argv[]) {
                             currentTool = selectedToolForDialog;
                             selectedToolForDialog = NONE;
                             showPreview = true;
-
-                            preX = 548;
-                            preY = 395;
 
                             continue; // جلوگیری از نفوذ این کلیک به بقیه‌ی هندلرها
                         } catch (...) {
@@ -1878,7 +2268,6 @@ int main(int argc, char* argv[]) {
                     continue;
                 }
 
-
                 if (hoveringDropdown && showFileMenu) {
                     int option = (my - 30) / 20;
                     switch (option) {
@@ -1894,9 +2283,18 @@ int main(int argc, char* argv[]) {
                     }
                     fileClicked = false;
                     showFileMenu = false;
-                } else if (mx >= 130 && mx <= 180 && my >= 0 && my <= 25) {
-                    runCircuit();
-                } else if (my >= 25 && my <= 75) {
+                }  else if (mx >= 120 && mx <= 220 && my >= 0 && my <= 30) {
+                    // اگر دیالوگ مقدار بازه، فعلاً کاری نکن تا تداخل پیش نیاد
+                    if (!showValueDialog) {
+                        showRunDialog = true;
+                        runChoice = RUN_DC;
+                        runNodeName.clear();
+                        runElemName.clear();
+                        runFocus = RF_NONE;
+                        SDL_StartTextInput();
+                    }
+                }
+                else if (my >= 25 && my <= 75) {
                     if (mx >= 30 && mx <= 60) currentTool = RESISTOR;
                     else if (mx >= 90 && mx <= 120) currentTool = CAPACITOR;
                     else if (mx >= 150 && mx <= 180) currentTool = INDUCTOR;
@@ -1921,50 +2319,59 @@ int main(int argc, char* argv[]) {
                 } else if (my > 75) {
                     if (currentTool == WIRE) {
                         if (!wireStartSelected) {
-                            // Snap start of wire to nearest connector
-                            int sx = mx, sy = my;
-                            for (auto& c : allConnectors) {
-                                if (abs(sx - c.x) <= 2 && abs(sy - c.y) <= 2) {
-                                    sx = c.x; sy = c.y;
-                                    break;
-                                }
-                            }
+                            int sx, sy;
+                            snapPointWithConnectorsFirst(mx, my, sx, sy);
                             wireX1 = sx; wireY1 = sy;
                             wireStartSelected = true;
                         } else {
-                            // Snap end of wire to nearest connector
-                            int ex = mx, ey = my;
-                            for (auto& c : allConnectors) {
-                                if (abs(ex - c.x) <= 2 && abs(ey - c.y) <= 2) {
-                                    ex = c.x; ey = c.y;
-                                    break;
-                                }
-                            }
-                            wires.push_back({{wireX1, wireY1}, {ex, ey}});
+                            int ex, ey;
+                            snapPointWithConnectorsFirst(mx, my, ex, ey);
+                            wires.push_back({ {wireX1, wireY1}, {ex, ey} });
                             wireStartSelected = false;
                             currentTool = NONE;
                             showPreview = false;
                         }
+//                        if (!wireStartSelected) {
+//                            // Snap start of wire to nearest connector
+//                            int sx = mx, sy = my;
+//                            for (auto& c : allConnectors) {
+//                                if (abs(sx - c.x) <= 2 && abs(sy - c.y) <= 2) {
+//                                    sx = c.x; sy = c.y;
+//                                    break;
+//                                }
+//                            }
+//                            wireX1 = sx; wireY1 = sy;
+//                            wireStartSelected = true;
+//                        } else {
+//                            // Snap end of wire to nearest connector
+//                            int ex = mx, ey = my;
+//                            for (auto& c : allConnectors) {
+//                                if (abs(ex - c.x) <= 2 && abs(ey - c.y) <= 2) {
+//                                    ex = c.x; ey = c.y;
+//                                    break;
+//                                }
+//                            }
+//                            wires.push_back({{wireX1, wireY1}, {ex, ey}});
+//                            wireStartSelected = false;
+//                            currentTool = NONE;
+//                            showPreview = false;
+//                        }
                     } else if (currentTool != NONE) {
 
                         // Snap element end if near existing connector
-                        int cx = mx, cy = my;
+                        int cx = mx, cy = my; snapPointWithConnectorsFirst(mx, my, cx, cy);
                         // For two-ended elements except GND
+                        const int PIN_OFFSET = ELEMENT_HALF_LEN + PIN_STUB; // = 40
+
                         if (currentTool != GROUND && currentTool != WIRE) {
                             for (const auto& c : allConnectors) {
                                 // left end of element at cx-25, cy
-                                if (abs((cx - 25) - c.x) <= 2 && abs(cy - c.y) <= 2) {
-                                    // snap left end to connector
-                                    cx = c.x + 25;
-                                    cy = c.y;
-                                    break;
+                                if (abs((cx - PIN_OFFSET) - c.x) <= 2 && abs(cy - c.y) <= 2) {
+                                    cx = c.x + PIN_OFFSET; cy = c.y; break;
                                 }
                                 // right end at cx+25, cy
-                                if (abs((cx + 25) - c.x) <= 2 && abs(cy - c.y) <= 2) {
-                                    // snap right end to connector
-                                    cx = c.x - 25;
-                                    cy = c.y;
-                                    break;
+                                if (abs((cx + PIN_OFFSET) - c.x) <= 2 && abs(cy - c.y) <= 2) {
+                                    cx = c.x - PIN_OFFSET; cy = c.y; break;
                                 }
                             }
                         } else if (currentTool == GROUND) {
@@ -1994,7 +2401,8 @@ int main(int argc, char* argv[]) {
                         showPreview = false;
                     }
                 }
-            } else if (showValueDialog) {
+            }
+            else if (showValueDialog) {
                 if (e.type == SDL_TEXTINPUT) {
                     const char* txt = e.text.text;
                     if (dialogFocus == FIELD_NAME) {
@@ -2044,17 +2452,45 @@ int main(int argc, char* argv[]) {
                     }
                 }
             }
+            else if (e.type == SDL_KEYDOWN && !showValueDialog && !showRunDialog) {
+                SDL_Keycode key = e.key.keysym.sym;
+
+                if (key == SDLK_r) currentTool = RESISTOR;
+                else if (key == SDLK_c) currentTool = CAPACITOR;
+                else if (key == SDLK_l) currentTool = INDUCTOR;
+                else if (key == SDLK_v) currentTool = VSOURCE;
+                else if (key == SDLK_i) currentTool = CSOURCE;
+                else if (key == SDLK_g) currentTool = GROUND;
+                else if (key == SDLK_w) currentTool = WIRE;
+                else continue;
+                // محدوده‌ی ابزارهای غیر از GROUND/WIRE: 30..330
+                if (currentTool != GROUND && currentTool != WIRE) {
+                    selectedToolForDialog = currentTool;
+                    currentTool = NONE;
+                    showValueDialog = true;
+
+                    inputNameText.clear();             // ← نام خالی
+                    inputValueText.clear();            // ← مقدار خالی
+                    dialogFocus = FIELD_NAME;          // ← فوکوس ابتدا روی نام
+                    SDL_StartTextInput();              // ← شروع دریافت ورودی متن
+                }
+
+            }
 
         }
 
+
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
         SDL_RenderClear(renderer);
+
+        drawGrid(renderer, winW, winH);
+
         drawMenuBar(renderer, font);
         drawToolbar(renderer);
         drawPlacedElements(renderer);
+        drawWires(renderer, wires);
         if (showFileMenu) drawFileDropdown(renderer, font);
         if (showPreview) drawPreviewElement(renderer, preX, preY);
-
         if (showValueDialog) {
             // پس‌زمینه دیالوگ
             SDL_SetRenderDrawColor(renderer, 200, 200, 200, 255);
@@ -2147,13 +2583,93 @@ int main(int argc, char* argv[]) {
                 SDL_FreeSurface(okSurf);
             }
         }
+// --- RENDER RUN DIALOG ---
+        if (showRunDialog) {
+            SDL_SetRenderDrawColor(renderer, 220, 220, 220, 255);
+            SDL_RenderFillRect(renderer, &runDialogRect);
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderDrawRect(renderer, &runDialogRect);
+
+            SDL_Color black = {0,0,0};
+            auto drawText = [&](const std::string& s, int x, int y){
+                SDL_Surface* surf = TTF_RenderText_Solid(font, s.c_str(), black);
+                if (!surf) return;
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+                SDL_Rect r = {x, y, surf->w, surf->h};
+                SDL_RenderCopy(renderer, tex, nullptr, &r);
+                SDL_DestroyTexture(tex); SDL_FreeSurface(surf);
+            };
+
+            drawText("Select analysis type", runDialogRect.x + 16, runDialogRect.y + 8);
+
+            SDL_Rect rbDC = {runDialogRect.x + 20,  runDialogRect.y + 40,  18, 18};
+            //SDL_Rect rbVT = {runDialogRect.x + 20,  runDialogRect.y + 60,  18, 18};
+            //SDL_Rect rbIT = {runDialogRect.x + 20,  runDialogRect.y + 100, 18, 18};
+
+            // DC
+            SDL_RenderDrawRect(renderer, &rbDC);
+            if (runChoice == RUN_DC) SDL_RenderFillRect(renderer, &rbDC);
+            drawText("DC (solve nodal voltages)", rbDC.x + 30, rbDC.y - 2);
+
+            // V–t
+            //SDL_RenderDrawRect(renderer, &rbVT);
+            //if (runChoice == RUN_VT) SDL_RenderFillRect(renderer, &rbVT);
+            //drawText("Transient V–t (node):", rbVT.x + 30, rbVT.y - 2);
+
+            // SDL_Rect nodeBox = {runDialogRect.x + 180, runDialogRect.y + 55, runDialogRect.w - 200, 28};
+            // SDL_SetRenderDrawColor(renderer, 255,255,255,255);
+            // SDL_RenderFillRect(renderer, &nodeBox);
+            // SDL_SetRenderDrawColor(renderer, 0,0,0,255);
+            // SDL_RenderDrawRect(renderer, &nodeBox);
+            // {
+            //     const char* toShow = runNodeName.empty()? "e.g. n1" : runNodeName.c_str();
+            //     SDL_Surface* s = TTF_RenderText_Solid(font, toShow, black);
+            //     if (s) {
+            //         SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
+            //         SDL_Rect r = {nodeBox.x + 6, nodeBox.y + 6, s->w, s->h};
+            //         SDL_RenderCopy(renderer, t, nullptr, &r);
+            //         SDL_DestroyTexture(t); SDL_FreeSurface(s);
+            //     }
+            // }
+
+            // I–t
+            //SDL_RenderDrawRect(renderer, &rbIT);
+            //if (runChoice == RUN_IT) SDL_RenderFillRect(renderer, &rbIT);
+            //drawText("Transient I–t (element):", rbIT.x + 30, rbIT.y - 2);
+
+            // SDL_Rect elemBox = {runDialogRect.x + 180, runDialogRect.y + 95, runDialogRect.w - 200, 28};
+            // SDL_SetRenderDrawColor(renderer, 255,255,255,255);
+            // SDL_RenderFillRect(renderer, &elemBox);
+            // SDL_SetRenderDrawColor(renderer, 0,0,0,255);
+            // SDL_RenderDrawRect(renderer, &elemBox);
+            // {
+            //  const char* toShow = runElemName.empty()? "e.g. R1" : runElemName.c_str();
+            //SDL_Surface* s = TTF_RenderText_Solid(font, toShow, black);
+            // if (s) {
+            //     SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
+            //     SDL_Rect r = {elemBox.x + 6, elemBox.y + 6, s->w, s->h};
+            //     SDL_RenderCopy(renderer, t, nullptr, &r);
+            //     SDL_DestroyTexture(t); SDL_FreeSurface(s);
+            // }
+            // }
+
+            // Buttons
+            SDL_Rect okBtn  = {runDialogRect.x + runDialogRect.w - 200, runDialogRect.y + runDialogRect.h - 40, 80, 28};
+            SDL_Rect cancelBtn = {okBtn.x + 100, okBtn.y, 80, 28};
+            SDL_SetRenderDrawColor(renderer, 180,180,180,255);
+            SDL_RenderFillRect(renderer, &okBtn);
+            SDL_RenderFillRect(renderer, &cancelBtn);
+            SDL_SetRenderDrawColor(renderer, 0,0,0,255);
+            SDL_RenderDrawRect(renderer, &okBtn);
+            SDL_RenderDrawRect(renderer, &cancelBtn);
+            drawText("OK", okBtn.x + 28, okBtn.y + 5);
+            drawText("Cancel", cancelBtn.x + 14, cancelBtn.y + 5);
+        }
 
 
 
 
         analyzeNodeConnections();
-
-        drawWires(renderer, wires);
 
         SDL_RenderPresent(renderer);
     }
