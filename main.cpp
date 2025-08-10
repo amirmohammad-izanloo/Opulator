@@ -1,10 +1,17 @@
 #include <bits/stdc++.h>
-
+#include <math.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL2_gfx.h>
 #include <fstream>
 #include <sstream>
+#include <complex>
+#include <vector>
+#include <string>
+#include <map>
+#include <complex>
+#include <cmath>
+#include <algorithm>
 
 using namespace std;
 
@@ -74,6 +81,17 @@ double parseNumber(string input) {
     return result;
 }
 
+string preprocessInput(const string& input) {
+    regex gndRegex(R"(^\s*G\s+(\S+)\s*$)", regex::icase);
+    std:smatch match;
+    if (regex_match(input, match, gndRegex)) {
+        // match[1] نام گره هست
+        return "add G " + match[1].str();
+    }
+    // اگر خط با G نبود، همون خط اصلی برگردونده میشه
+    return input;
+}
+
 //================ Schematic Structure & Global Storage ============
 struct Schematic {
     string name;
@@ -93,9 +111,9 @@ string extractFileName(const string &filePath) {
 }
 // ===== Wave storage =====
 struct WaveStore {
-    std::vector<double> t;                        // time (s)
-    std::map<std::string, std::vector<double>> V; // node voltages
-    std::map<std::string, std::vector<double>> I; // element currents (optional)
+    vector<double> t;                        // time (s)
+    map<string, vector<double>> V; // node voltages
+    map<string, vector<double>> I; // element currents (optional)
     void clear(){ t.clear(); V.clear(); I.clear(); }
 };
 
@@ -335,7 +353,7 @@ public:
         totalSteps = steps;
     }
 
-    bool computeNodalVoltages(std::map<std::string,double>& outV) const;
+    bool computeNodalVoltages(map<string,double>& outV) const;
 
     void solveNodalAnalysis() {
         bool foundGround = false;
@@ -458,31 +476,31 @@ public:
             if (node->getName() == this->groundName) { foundGround = true; break; }
         if (!foundGround) throw NoGroundException();
 
-        std::vector<Node*> unknownNodes;
+        vector<Node*> unknownNodes;
         for (auto node : this->nodes)
             if (node->getName() != this->groundName)
                 unknownNodes.push_back(node);
         int n = (int)unknownNodes.size();
         if (n == 0) return;
 
-        std::map<std::string,int> nodeIndex;
+        map<string,int> nodeIndex;
         for (int i = 0; i < n; ++i) nodeIndex[unknownNodes[i]->getName()] = i;
 
-        std::map<std::string,double> prevVoltages;
+        map<string,double> prevVoltages;
         for (auto node : unknownNodes) prevVoltages[node->getName()] = 0.0;
 
-        static std::map<std::string,double> inductorCurrents;
+        static map<string,double> inductorCurrents;
         for (auto &kv : inductorCurrents) kv.second = 0.0;
 
         for (int step = 0; step < this->totalSteps; ++step) {
             double time = step * this->timeStep;
 
-            std::vector<std::vector<double>> A(n, std::vector<double>(n, 0.0));
-            std::vector<double> b(n, 0.0);
+            vector<vector<double>> A(n, vector<double>(n, 0.0));
+            vector<double> b(n, 0.0);
 
             for (auto elem : this->elements) {
-                std::string na = elem->getNode1()->getName();
-                std::string nb = elem->getNode2()->getName();
+                string na = elem->getNode1()->getName();
+                string nb = elem->getNode2()->getName();
                 int i = (na != this->groundName) ? nodeIndex[na] : -1;
                 int j = (nb != this->groundName) ? nodeIndex[nb] : -1;
 
@@ -510,7 +528,7 @@ public:
                 else if (elem->getType() == "Inductor") {
                     double L = elem->getValue();
                     double G_ind = this->timeStep / L;
-                    std::string indName = elem->getName();
+                    string indName = elem->getName();
                     if (!inductorCurrents.count(indName)) inductorCurrents[indName] = 0.0;
                     double I_prev = inductorCurrents[indName];
                     if (i != -1) { A[i][i] += G_ind; b[i] -= I_prev; }
@@ -528,26 +546,26 @@ public:
                 }
             }
 
-            std::vector<double> x = gaussianElimination(A, b);
+            vector<double> x = gaussianElimination(A, b);
 
             for (auto elem : this->elements) {
                 if (elem->getType() == "Inductor") {
-                    std::string na = elem->getNode1()->getName();
-                    std::string nb = elem->getNode2()->getName();
+                    string na = elem->getNode1()->getName();
+                    string nb = elem->getNode2()->getName();
                     int i = (na != this->groundName) ? nodeIndex[na] : -1;
                     int j = (nb != this->groundName) ? nodeIndex[nb] : -1;
                     double V_ind = 0.0;
                     if (i != -1) V_ind += x[i];
                     if (j != -1) V_ind -= x[j];
                     double G_ind = this->timeStep / elem->getValue();
-                    std::string indName = elem->getName();
+                    string indName = elem->getName();
                     inductorCurrents[indName] = inductorCurrents[indName] + G_ind * V_ind;
                 }
             }
 
             ws.t.push_back(time);
             for (int k = 0; k < n; ++k) {
-                std::string nodeName = unknownNodes[k]->getName();
+                string nodeName = unknownNodes[k]->getName();
                 ws.V[nodeName].push_back(x[k]);
                 prevVoltages[nodeName] = x[k];
             }
@@ -582,12 +600,28 @@ public:
     }
 
 
-    bool computeDCOP(std::map<std::string,double>& outV,
-                      std::map<std::string,double>& outI) const;
+    bool computeDCOP(map<string,double>& outV,
+                     map<string,double>& outI) const;
 
 
 
 };
+
+// ======================= PATCH A — AC Sweep (fixed) =======================
+
+inline string fmt6(double val) {
+    ostringstream oss;
+    oss << fixed << setprecision(6) << val;
+    return oss.str();
+}
+// نوع عدد مختلط واحد
+using cd = complex<double>;
+static const cd j(0.0, 1.0);
+
+// logspace دقیق: num>=2 نقطه بین start..stop (هر دو > 0)
+
+// ===================== end of PATCH A — AC Sweep (fixed) ===================
+
 
 // هر چیزی با R <= 1e-9 را «سیم» حساب کنیم
 inline bool isWireResistor(const Element* e) {
@@ -598,21 +632,17 @@ inline bool isWireResistor(const Element* e) {
 }
 
 // فرمت خروجی؛ پیش‌فرض 6 رقم بعد اعشار
-inline string fmt6(double x) {
-    ostringstream oss;
-    oss << fixed << setprecision(6) << x;
-    return oss.str();
-}
+
 
 string formatWithSI(double value, const char* unit = "") {
-    if (!std::isfinite(value)) return "N/A";
+    if (!isfinite(value)) return "N/A";
 
     static const struct { const char* pfx; double mul; } prefixes[] = {
             {"G", 1e9}, {"M", 1e6}, {"k", 1e3}, {"", 1.0},
             {"m", 1e-3}, {"u", 1e-6}, {"n", 1e-9}, {"p", 1e-12}
     };
 
-    double av = std::fabs(value);
+    double av = fabs(value);
     const char* pfx = "";
     double mul = 1.0;
 
@@ -625,12 +655,12 @@ string formatWithSI(double value, const char* unit = "") {
 
     double scaled = value / mul;
 
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(6) << scaled;
-    std::string s = oss.str();
+    ostringstream oss;
+    oss << fixed << setprecision(6) << scaled;
+    string s = oss.str();
 
     // حذف صفرهای اضافی انتها
-    if (s.find('.') != std::string::npos) {
+    if (s.find('.') != string::npos) {
         while (!s.empty() && s.back() == '0') s.pop_back();
         if (!s.empty() && s.back() == '.') s.pop_back();
     }
@@ -640,8 +670,8 @@ string formatWithSI(double value, const char* unit = "") {
     return s;
 }
 
-bool Circuit::computeDCOP(std::map<std::string,double>& outV,
-                          std::map<std::string,double>& outI) const {
+bool Circuit::computeDCOP(map<string,double>& outV,
+                          map<string,double>& outI) const {
     // وجود گراند
     bool foundGround = false;
     for (auto node : nodes)
@@ -649,7 +679,7 @@ bool Circuit::computeDCOP(std::map<std::string,double>& outV,
     if (!foundGround) throw NoGroundException();
 
     // لیست گره‌های مجهول (به‌جز زمین)
-    std::vector<Node*> unknown;
+    vector<Node*> unknown;
     for (auto node : nodes)
         if (node->getName() != groundName) unknown.push_back(node);
 
@@ -658,20 +688,20 @@ bool Circuit::computeDCOP(std::map<std::string,double>& outV,
     if (n == 0) return true;
 
     // ایندکس‌گذاری گره‌ها
-    std::map<std::string,int> idx;
+    map<string,int> idx;
     for (int i=0;i<n;++i) idx[unknown[i]->getName()] = i;
 
     // ماتریس Ax=b هم‌سبکِ solveNodalAnalysis
-    std::vector<std::vector<double>> A(n, std::vector<double>(n, 0.0));
-    std::vector<double> b(n, 0.0);
+    vector<vector<double>> A(n, vector<double>(n, 0.0));
+    vector<double> b(n, 0.0);
 
     for (auto elem : elements) {
         // Resistor
         if (auto* r = dynamic_cast<Resistor*>(elem)) {
             double R = r->getValue(); if (R <= 1e-9) R = 1e-9;
             double g = 1.0 / R;
-            std::string a = r->getNode1()->getName();
-            std::string c = r->getNode2()->getName();
+            string a = r->getNode1()->getName();
+            string c = r->getNode2()->getName();
             bool ia = (a != groundName), ic = (c != groundName);
             if (ia && ic) { int i = idx[a], j = idx[c]; A[i][i]+=g; A[j][j]+=g; A[i][j]-=g; A[j][i]-=g; }
             else if (!ia && ic) { int j = idx[c]; A[j][j]+=g; }
@@ -682,8 +712,8 @@ bool Circuit::computeDCOP(std::map<std::string,double>& outV,
         if (auto* vs = dynamic_cast<VoltageSource*>(elem)) {
             double V = vs->getValue();               // DC offset
             const double G_big = 1e6;
-            std::string a = vs->getNode1()->getName();
-            std::string c = vs->getNode2()->getName();
+            string a = vs->getNode1()->getName();
+            string c = vs->getNode2()->getName();
             if (a == groundName && c != groundName) { int j = idx[c]; A[j][j]+=G_big; b[j] -= V*G_big; }
             else if (c == groundName && a != groundName) { int i = idx[a]; A[i][i]+=G_big; b[i] += V*G_big; }
             // در غیر این صورت فعلاً رها
@@ -692,8 +722,8 @@ bool Circuit::computeDCOP(std::map<std::string,double>& outV,
         // Inductor (در DC: اتصال کوتاه معادل → هدایت بزرگ به زمین اگر یک سر به زمینه)
         if (auto* ind = dynamic_cast<Inductor*>(elem)) {
             const double G_big = 1e6;
-            std::string a = ind->getNode1()->getName();
-            std::string c = ind->getNode2()->getName();
+            string a = ind->getNode1()->getName();
+            string c = ind->getNode2()->getName();
             if (a == groundName && c != groundName) { int j = idx[c]; A[j][j]+=G_big; }
             else if (c == groundName && a != groundName) { int i = idx[a]; A[i][i]+=G_big; }
             continue;
@@ -701,8 +731,8 @@ bool Circuit::computeDCOP(std::map<std::string,double>& outV,
         // Current source
         if (auto* cs = dynamic_cast<CurrentSource*>(elem)) {
             double I = cs->getValue();
-            std::string a = cs->getNode1()->getName();
-            std::string c = cs->getNode2()->getName();
+            string a = cs->getNode1()->getName();
+            string c = cs->getNode2()->getName();
             if (a != groundName && c != groundName) { b[idx[a]] += I; b[idx[c]] -= I; }
             else if (a == groundName && c != groundName) { b[idx[c]] -= I; }
             else if (c == groundName && a != groundName) { b[idx[a]] += I; }
@@ -712,7 +742,7 @@ bool Circuit::computeDCOP(std::map<std::string,double>& outV,
     }
 
     // حل
-    std::vector<double> x = gaussianElimination(A, b);
+    vector<double> x = gaussianElimination(A, b);
 
     // ولتاژها
     for (auto& kv : idx) outV[kv.first] = x[kv.second];
@@ -725,9 +755,9 @@ bool Circuit::computeDCOP(std::map<std::string,double>& outV,
         if (isWireResistor(elem)) {
             continue;
         }
-        std::string name = elem->getName();
-        std::string a = elem->getNode1()->getName();
-        std::string c = elem->getNode2()->getName();
+        string name = elem->getName();
+        string a = elem->getNode1()->getName();
+        string c = elem->getNode2()->getName();
         double Va = (a == groundName) ? 0.0 : outV[a];
         double Vc = (c == groundName) ? 0.0 : outV[c];
 
@@ -751,7 +781,7 @@ bool Circuit::computeDCOP(std::map<std::string,double>& outV,
 }
 
 
-bool Circuit::computeNodalVoltages(std::map<std::string,double>& outV) const {
+bool Circuit::computeNodalVoltages(map<string,double>& outV) const {
     // همان منطق solveNodalAnalysis، ولی بدون چاپ و برگرداندن map
     bool foundGround = false;
     for (auto node : nodes) {
@@ -759,7 +789,7 @@ bool Circuit::computeNodalVoltages(std::map<std::string,double>& outV) const {
     }
     if (!foundGround) throw NoGroundException();
 
-    std::vector<Node*> unknownNodes;
+    vector<Node*> unknownNodes;
     for (auto node : nodes)
         if (node->getName() != groundName)
             unknownNodes.push_back(node);
@@ -767,12 +797,12 @@ bool Circuit::computeNodalVoltages(std::map<std::string,double>& outV) const {
     int n = (int)unknownNodes.size();
     if (n == 0) { outV.clear(); return true; }
 
-    std::map<std::string,int> nodeIndex;
+    map<string,int> nodeIndex;
     for (int i = 0; i < n; ++i)
         nodeIndex[unknownNodes[i]->getName()] = i;
 
-    std::vector<std::vector<double>> A(n, std::vector<double>(n, 0.0));
-    std::vector<double> b(n, 0.0);
+    vector<vector<double>> A(n, vector<double>(n, 0.0));
+    vector<double> b(n, 0.0);
 
     for (auto elem : elements) {
         // Resistor
@@ -780,8 +810,8 @@ bool Circuit::computeNodalVoltages(std::map<std::string,double>& outV) const {
             double R = r->getValue();
             if (R <= 1e-9) R = 1e-9;
             double g = 1.0 / R;
-            std::string a = r->getNode1()->getName();
-            std::string bnode = r->getNode2()->getName();
+            string a = r->getNode1()->getName();
+            string bnode = r->getNode2()->getName();
             if (a != groundName && bnode != groundName) {
                 int i = nodeIndex[a], j = nodeIndex[bnode];
                 A[i][i] += g; A[j][j] += g; A[i][j] -= g; A[j][i] -= g;
@@ -796,8 +826,8 @@ bool Circuit::computeNodalVoltages(std::map<std::string,double>& outV) const {
         if (auto* vs = dynamic_cast<VoltageSource*>(elem)) {
             double V = vs->getValue(); // برای DC: offset
             const double G_big = 1e6;
-            std::string a = vs->getNode1()->getName();
-            std::string bnode = vs->getNode2()->getName();
+            string a = vs->getNode1()->getName();
+            string bnode = vs->getNode2()->getName();
             if (a == groundName && bnode != groundName) {
                 int j = nodeIndex[bnode]; A[j][j] += G_big; b[j] -= V * G_big;
             } else if (bnode == groundName && a != groundName) {
@@ -810,8 +840,8 @@ bool Circuit::computeNodalVoltages(std::map<std::string,double>& outV) const {
         // Inductor → در DC معادل اتصال کوتاه (با G_big)
         if (auto* ind = dynamic_cast<Inductor*>(elem)) {
             const double G_big = 1e6;
-            std::string a = ind->getNode1()->getName();
-            std::string bnode = ind->getNode2()->getName();
+            string a = ind->getNode1()->getName();
+            string bnode = ind->getNode2()->getName();
             if (a == groundName && bnode != groundName) {
                 int j = nodeIndex[bnode]; A[j][j] += G_big;
             } else if (bnode == groundName && a != groundName) {
@@ -824,8 +854,8 @@ bool Circuit::computeNodalVoltages(std::map<std::string,double>& outV) const {
         // CurrentSource
         if (auto* cs = dynamic_cast<CurrentSource*>(elem)) {
             double I = cs->getValue();
-            std::string a = cs->getNode1()->getName();
-            std::string bnode = cs->getNode2()->getName();
+            string a = cs->getNode1()->getName();
+            string bnode = cs->getNode2()->getName();
             if (a != groundName && bnode != groundName) {
                 b[nodeIndex[a]] += I;
                 b[nodeIndex[bnode]] -= I;
@@ -838,7 +868,7 @@ bool Circuit::computeNodalVoltages(std::map<std::string,double>& outV) const {
         }
     }
 
-    std::vector<double> x = gaussianElimination(A, b);
+    vector<double> x = gaussianElimination(A, b);
     outV.clear();
     for (auto &kv : nodeIndex) outV[kv.first] = x[kv.second];
     return true;
@@ -1013,11 +1043,13 @@ vector<string> parseCommandLine(const string &cmd) {
                 tokens.push_back(match[i].str());
             return tokens;
         }
-        if (regex_match(cmd, match, regex(R"(add\s+G\s+([^ ]+))"))) {
+        // accept both: "add G <node>" and "add GND <node>"
+        if (regex_match(cmd, match, regex(R"(add\s+G(?:ND)?\s+([^ ]+))"))) {
             tokens.push_back("addGND");
             tokens.push_back(match[1].str()); // nodeName
             return tokens;
         }
+
         // delete and list commands are similar...
         if (regex_match(cmd, match, regex(R"(delete\s+([^ ]+))"))) {
             tokens.push_back("delete");
@@ -1269,6 +1301,8 @@ void inputHandler(const string &input, Circuit &circuit) {
 }
 
 
+
+
 void chooseSchematic(const string &numStr) {
     int choice = 0;
     try {
@@ -1349,7 +1383,7 @@ void saveSchematic(Circuit &circuit) {
         cerr << "Schematic has been removed or transformed." << endl;
     } else {
         for (const auto& item : newLines) {
-            outFile << item << std::endl;
+            outFile << item << endl;
         }
     }
     outFile.close();
@@ -1383,13 +1417,20 @@ void processInput(Circuit &circuit) {
 
 //================ Basic Drawing Functions ====================
 
-enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE };
+enum ToolType { NONE, RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, WIRE , VSIN  };
 struct PlacedElement {
     ToolType type;
     int x, y;
     string name;
     double value;
+    double amp = 0.0;     // دامنه ولتاژ (V)
+    double freq = 0.0;    // فرکانس (Hz)
+    double phase = 0.0;
 };
+
+
+// برای کنترل فوکوس بین فیلدها (۰=Name, 1=Amp, 2=Freq, 3=Phase)
+int vacFocus = 0;
 vector<PlacedElement> placedElements;
 ToolType currentTool = NONE;
 
@@ -1402,6 +1443,7 @@ static const int ELEMENT_HALF_LEN = 30;  // نیم‌طول بدنه (مضرب 1
 static const int PIN_STUB         = 10;  // طول استاب پین
 
 const int PIN_OFFSET = ELEMENT_HALF_LEN + PIN_STUB; // = 40
+
 
 
 
@@ -1513,6 +1555,40 @@ void drawVoltageSource(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
     SDL_RenderDrawLine(r, cx - 12, cy, cx - 4, cy);
     SDL_RenderDrawLine(r, cx + 4, cy, cx + 12, cy);
 }
+void drawACVoltageSource(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
+    // بدنه: از x1 تا x2 روی یک خط افقی
+    // مرکز و شعاع دایره
+    int cx = (x1 + x2) / 2;
+    int cy = y1;
+    int radius = 12;
+
+    // پین‌ها و نقطه‌های اتصال مثل بقیه‌ی منابع
+    drawWireEnds(r, x1, y1, x2, y2);
+
+    // دایره
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
+    for (int w = 0; w < 360; w += 2) {
+        double ra1 = (w)     * M_PI / 180.0;
+        double ra2 = (w + 2) * M_PI / 180.0;
+        int px1 = cx + (int)(radius * cos(ra1));
+        int py1 = cy + (int)(radius * sin(ra1));
+        int px2 = cx + (int)(radius * cos(ra2));
+        int py2 = cy + (int)(radius * sin(ra2));
+        SDL_RenderDrawLine(r, px1, py1, px2, py2);
+    }
+
+    // موج سینوسی کوچک داخل دایره
+    int amp = radius / 3;           // دامنه‌ی کوچک
+    int left = cx - radius + 3;
+    int right = cx + radius - 3;
+    int prevx = left;
+    int prevy = cy + (int)(amp * sin((prevx - left) * 2.0 * M_PI / (right - left)));
+    for (int x = left + 1; x <= right; ++x) {
+        int y = cy + (int)(amp * sin((x - left) * 2.0 * M_PI / (right - left)));
+        SDL_RenderDrawLine(r, prevx, prevy, x, y);
+        prevx = x; prevy = y;
+    }
+}
 
 void drawCurrentSource(SDL_Renderer* r, int x1, int y1, int x2, int y2) {
     drawWireEnds(r, x1, y1, x2, y2);
@@ -1556,7 +1632,7 @@ void drawGround(SDL_Renderer* r, int x, int y) {
     drawConnector(r, x, y); // only one connector at top
 }
 
-void drawToolbar(SDL_Renderer* renderer) {
+void drawToolbar(SDL_Renderer* renderer, TTF_Font* font) {
     SDL_Rect bar = {0, 25, 1280, 50};
     SDL_SetRenderDrawColor(renderer, 240, 240, 240, 255);
     SDL_RenderFillRect(renderer, &bar);
@@ -1572,6 +1648,24 @@ void drawToolbar(SDL_Renderer* renderer) {
     drawGround(renderer, x + 15, 50); x += 60;
     SDL_RenderDrawLine(renderer, x + 10, 40, x + 10, 60); // یک خط عمودی به‌عنوان نماد سیم
     x += 30;
+    auto drawVACIcon = [&](int cx, int cy) {
+        int x1 = cx - ELEMENT_HALF_LEN, y = cy;
+        int x2 = cx + ELEMENT_HALF_LEN;
+        drawACVoltageSource(renderer, x1, y, x2, y);
+        SDL_Color black{0,0,0};
+        SDL_Surface* s = TTF_RenderText_Solid(font, "VAC", black);
+        if (s) {
+            SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
+            SDL_Rect dst{ cx - s->w/2, cy + 18, s->w, s->h };
+            SDL_RenderCopy(renderer, t, nullptr, &dst);
+            SDL_DestroyTexture(t);
+            SDL_FreeSurface(s);
+        }
+    };
+
+    // فراخوانی در مختصات مناسب
+    drawVACIcon(465, 50);
+
 }
 
 bool wireStartSelected = false;
@@ -1603,6 +1697,7 @@ void drawPlacedElements(SDL_Renderer* r) {
             case VSOURCE:   drawVoltageSource(r, x1, y1, x2, y2); break;
             case CSOURCE:   drawCurrentSource(r, x1, y1, x2, y2); break;
             case GROUND:    drawGround(r, e.x, e.y); break;
+            case VSIN:      drawACVoltageSource(r, x1, y1, x2, y2); break;
             default: break;
         }
     }
@@ -1621,6 +1716,7 @@ void drawPreviewElement(SDL_Renderer* r, int preX, int preY) {
         case VSOURCE:   drawVoltageSource(r, x1, y1, x2, y2); break;
         case CSOURCE:   drawCurrentSource(r, x1, y1, x2, y2); break;
         case GROUND:    drawGround(r, preX, preY); break;
+        case VSIN:      drawACVoltageSource(r, x1, y1, x2, y2); break;
         default: break;
     }
 }
@@ -1642,6 +1738,8 @@ map<int, string> connectorToNode;
 int connectorIdCounter = 0;
 
 map<int, string> connectorToNodeName;
+
+
 
 int addConnector(int x, int y) {
     for (const auto& c : allConnectors) {
@@ -1722,86 +1820,201 @@ void analyzeNodeConnections() {
     }
 }
 
+// ---------------- Canvas → Circuit ----------------
+void buildCircuit(Circuit& circuit) {
+    // 0) پاک‌سازی مدار و بازسازی توپولوژی از روی بوم
+    circuit.reset();
+    allConnectors.clear();
+    connectorToNode.clear();
+    connectorIdCounter = 0;        // اگر global است
+    analyzeNodeConnections();      // پرکردن allConnectors / connectorToNode
+
+    // 1) ساخت گره‌ها (با مختصات، اگر خواستی نگه داری)
+    unordered_map<string, pair<int,int>> nodePos;
+    for (const auto& c : allConnectors) {
+        auto it = connectorToNode.find(c.id);
+        if (it == connectorToNode.end()) continue;
+        const string& nn = it->second;
+        if (!nodePos.count(nn)) nodePos[nn] = {c.x, c.y};
+    }
+    for (auto& kv : nodePos) {
+        Node* n = circuit.getOrCreateNode(kv.first);
+        n->setX(kv.second.first);
+        n->setY(kv.second.second);
+    }
+
+    // 2) افزودن المان‌ها بر پایهٔ نوع ابزار
+    const int PIN_OFFSET = ELEMENT_HALF_LEN + PIN_STUB;
+    map<ToolType,int> typeCounter;
+    auto autoName = [&](const PlacedElement& e)->string{
+        static map<ToolType,char> L = {
+                {RESISTOR,'R'},{CAPACITOR,'C'},{INDUCTOR,'L'},
+                {VSOURCE,'V'}, {CSOURCE,'I'},  {GROUND,'G'},
+                {VSIN,'V'}
+        };
+        if (!e.name.empty()) return e.name;
+        return string(1, L[e.type]) + to_string(++typeCounter[e.type]);
+    };
+
+    for (const auto& e : placedElements) {
+        if (e.type == WIRE) continue;
+
+        // id کانکتورها دقیقاً با همان هندسه‌ی رسم
+        int id1, id2;
+        int y = e.y;
+        if (e.type == GROUND) {
+            id1 = addConnector(e.x, y);
+            id2 = id1;
+        } else {
+            id1 = addConnector(e.x - PIN_OFFSET, y);
+            id2 = addConnector(e.x + PIN_OFFSET, y);
+        }
+
+        auto it1 = connectorToNode.find(id1);
+        auto it2 = connectorToNode.find(id2);
+        if (it1 == connectorToNode.end() || it2 == connectorToNode.end()) continue;
+
+        const string node1 = it1->second;
+        const string node2 = it2->second;
+
+        Node* n1 = circuit.getOrCreateNode(node1);
+        Node* n2 = circuit.getOrCreateNode(node2);
+        string name = autoName(e);
+
+        switch (e.type) {
+            case RESISTOR:
+                circuit.addElement(new Resistor(name, n1, n2, e.value));
+                break;
+            case CAPACITOR:
+                circuit.addElement(new Capacitor(name, n1, n2, e.value));
+                break;
+            case INDUCTOR:
+                circuit.addElement(new Inductor(name, n1, n2, e.value));
+                break;
+            case VSOURCE: // منبع ولتاژ DC
+                circuit.addElement(new VoltageSource(name, n1, n2, e.value));
+                break;
+            case VSIN:    // VAC: offset, amp, freq
+                circuit.addElement(new VoltageSource(name, n1, n2, e.value, e.amp, e.freq));
+                break;
+            case CSOURCE:
+                circuit.addElement(new CurrentSource(name, n1, n2, e.value));
+                break;
+            case GROUND:
+                if (circuit.getGroundName().empty())
+                    circuit.setGroundNode(node1);
+                break;
+            default: break;
+        }
+    }
+
+    // 3) (اختیاری) تبدیل Wire های گرافیکی به R=0 اگر دو نود متفاوت را پل بزنند
+    int widx = 1;
+    for (const auto& w : wires) {
+        int id1 = addConnector(w.first.x,  w.first.y);
+        int id2 = addConnector(w.second.x, w.second.y);
+        auto it1 = connectorToNode.find(id1);
+        auto it2 = connectorToNode.find(id2);
+        if (it1 == connectorToNode.end() || it2 == connectorToNode.end()) continue;
+        const string& a = it1->second;
+        const string& b = it2->second;
+        if (a == b) continue;
+        Node* n1 = circuit.getOrCreateNode(a);
+        Node* n2 = circuit.getOrCreateNode(b);
+        circuit.addElement(new Resistor("W" + to_string(widx++), n1, n2, 0.0));
+    }
+}
+
+
 vector<string> generateAddCommands() {
     vector<string> commands;
     set<string> addedNodes;
 
-    // 1) خروجی گره‌ها با مختصات (مثل قبل)
+    // 0) dump unique nodes (so loader can restore coordinates)
     for (const auto& c : allConnectors) {
-        string nodeName = connectorToNode[c.id];
+        auto it = connectorToNode.find(c.id);
+        if (it == connectorToNode.end()) continue;
+        const string& nodeName = it->second;
         if (addedNodes.insert(nodeName).second) {
             commands.push_back("node " + nodeName + " " + to_string(c.x) + " " + to_string(c.y));
         }
     }
 
-    // 2) نگاشت نوع به حرف و شمارندهٔ نام خودکار (مثل قبل)
+    // shared geometry (must match draw/extract)
+    const int PIN_OFFSET = ELEMENT_HALF_LEN + PIN_STUB;
+
+    // type -> letter
     map<ToolType, char> typeChar = {
-            {RESISTOR, 'R'}, {CAPACITOR, 'C'}, {INDUCTOR, 'L'},
-            {VSOURCE, 'V'}, {CSOURCE, 'I'}, {GROUND, 'G'}
+            {RESISTOR,'R'}, {CAPACITOR,'C'}, {INDUCTOR,'L'},
+            {VSOURCE,'V'},  {CSOURCE,'I'},  {GROUND,'G'},
+            {VSIN,'V'}
     };
-    map<ToolType, int> typeCounter;
+    map<ToolType,int> typeCounter;
 
-    // (اختیاری: لاگ مثل قبل)
-    // int wireCount = 0;
-
-    // 3) المنت‌ها
+    // 1) elements
     for (const auto& e : placedElements) {
-        cout << e.type << endl;
+        if (e.type == WIRE) continue; // wires handled below (optional)
 
-        // مثل قبل: wireها را اینجا رد می‌کنیم و پایین به‌صورت R=0 اضافه می‌کنیم
-        if (e.type == WIRE) {
+        // resolve connector ids via your own registry (exact IDs)
+        int y  = e.y;
+        int id1, id2;
+        if (e.type == GROUND) {
+            id1 = addConnector(e.x, y);
+            id2 = id1;
+        } else {
+            id1 = addConnector(e.x - PIN_OFFSET, y);
+            id2 = addConnector(e.x + PIN_OFFSET, y);
+        }
+
+        auto it1 = connectorToNode.find(id1);
+        auto it2 = connectorToNode.find(id2);
+        if (it1 == connectorToNode.end() || it2 == connectorToNode.end()) continue; // safety
+
+        const string node1 = it1->second;
+        const string node2 = it2->second;
+
+        // element name: prefer user-provided; else auto
+        string name = e.name;
+        if (name.empty()) name = string(1, typeChar[e.type]) + to_string(++typeCounter[e.type]);
+
+        // build line
+        if (e.type == GROUND) {
+            commands.push_back("G " + node1);
             continue;
         }
 
-        int x1 = e.x - (ELEMENT_HALF_LEN + PIN_STUB); // = e.x - 40
-        int x2 = e.x + (ELEMENT_HALF_LEN + PIN_STUB); // = e.x + 40
-        int y  = e.y;
-
-
-        // مثل قبل: کانکتور چپ/راست (یا تک نقطه برای GROUND)
-        int id1 = (e.type == GROUND) ? addConnector(e.x, y) : addConnector(x1, y);
-        int id2 = (e.type == GROUND) ? id1            : addConnector(x2, y);
-
-        string node1 = connectorToNode[id1];
-        string node2 = connectorToNode[id2];
-
-        // نام: اگر کاربر نام داده از همان استفاده؛ وگرنه مثل قبل خودکار بساز
-        string name = e.name;
-        if (name.empty()) {
-            name = string(1, typeChar[e.type]) + to_string(++typeCounter[e.type]);
+        // VSIN: SIN(offset amp freq)
+        if (e.type == VSIN) {
+            ostringstream oss;
+            // e.value = DC offset, e.amp = amplitude, e.freq = frequency
+            oss << "V " << name << " " << node1 << " " << node2
+                << " SIN(" << e.value << " " << e.amp << " " << e.freq << ")";
+            commands.push_back(oss.str());
+            continue;
         }
 
-        // مقدار واقعی به‌جای نمونه مقادیر
-        string valStr = to_string(e.value);
+        // generic 2‑terminal (R/C/L, VSOURCE DC, CSOURCE DC)
+        ostringstream line;
+        line << typeChar[e.type] << " " << name << " " << node1 << " " << node2 << " " << e.value;
 
-        string line;
-        if (e.type == CSOURCE) {
-            // حفظ استثنا: I <name> node2 node1 <value>
-            line = string(1, typeChar[e.type]) + string(" ") + name + " " + node2 + " " + node1 + " " + valStr;
-        } else if (e.type != GROUND) {
-            // R/C/L/V: <char> <name> node1 node2 <value>
-            line = string(1, typeChar[e.type]) + string(" ") + name + " " + node1 + " " + node2 + " " + valStr;
-        } else {
-            // GND مثل قبل فقط با یک نود
-            line = string(1, typeChar[e.type]) + string(" ") + node1;
-        }
-
-        commands.push_back(line);
+        // current source direction is node1 -> node2 (kept as-is)
+        commands.push_back(line.str());
     }
 
-    // 4) سیم‌ها مثل قبل: R Wi node1 node2 0
-//    int wireIndex = 1;
-//    for (const auto& w : wires) {
-//        int id1 = addConnector(w.first.x,  w.first.y);
-//        int id2 = addConnector(w.second.x, w.second.y);
-//
-//        string node1 = connectorToNode[id1];
-//        string node2 = connectorToNode[id2];
-//
-//        string name = "W" + to_string(wireIndex++);
-//        string line = "R " + name + " " + node1 + " " + node2 + " 0";
-//        commands.push_back(line);
-//    }
+    // 2) optional: export graphical wires as R=0 only if they bridge different nodes
+    int widx = 1;
+    for (const auto& w : wires) {
+        int id1 = addConnector(w.first.x,  w.first.y);
+        int id2 = addConnector(w.second.x, w.second.y);
+        auto it1 = connectorToNode.find(id1);
+        auto it2 = connectorToNode.find(id2);
+        if (it1 == connectorToNode.end() || it2 == connectorToNode.end()) continue;
+
+        const string& n1 = it1->second;
+        const string& n2 = it2->second;
+        if (n1 == n2) continue; // skip self-loop wires
+        commands.push_back("R W" + to_string(widx++) + " " + n1 + " " + n2 + " 0");
+    }
 
     return commands;
 }
@@ -1818,16 +2031,16 @@ void saveCircuitToFile(const string& filename) {
 bool isGroundPlaced = false;
 
 
-void showDCOPWindow(const std::map<std::string,double>& Vmap,
-                    const std::map<std::string,double>& Imap,
-                    const std::string& gndName) {
+void showDCOPWindow(const map<string,double>& Vmap,
+                    const map<string,double>& Imap,
+                    const string& gndName) {
     SDL_Window* w = SDL_CreateWindow("DC Operating Point",
                                      SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                      760, 520, SDL_WINDOW_SHOWN);
     SDL_Renderer* r = SDL_CreateRenderer(w, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     TTF_Font* f = TTF_OpenFont("C:\\Windows\\Fonts\\Arial.ttf", 14);
 
-    auto drawText = [&](const std::string& s, int x, int y){
+    auto drawText = [&](const string& s, int x, int y){
         if (!f) return;
         SDL_Color black{0,0,0};
         SDL_Surface* surf = TTF_RenderText_Solid(f, s.c_str(), black);
@@ -1839,11 +2052,11 @@ void showDCOPWindow(const std::map<std::string,double>& Vmap,
     };
 
     // مرتب‌سازی برای نمایش منظم
-    std::vector<std::pair<std::string,double>> nodes(Vmap.begin(), Vmap.end());
-    std::sort(nodes.begin(), nodes.end(), [](auto& a, auto& b){ return a.first < b.first; });
+    vector<pair<string,double>> nodes(Vmap.begin(), Vmap.end());
+    sort(nodes.begin(), nodes.end(), [](auto& a, auto& b){ return a.first < b.first; });
 
-    std::vector<std::pair<std::string,double>> elems(Imap.begin(), Imap.end());
-    std::sort(elems.begin(), elems.end(), [](auto& a, auto& b){ return a.first < b.first; });
+    vector<pair<string,double>> elems(Imap.begin(), Imap.end());
+    sort(elems.begin(), elems.end(), [](auto& a, auto& b){ return a.first < b.first; });
 
     bool quit=false; SDL_Event e; int scrollL=0, scrollR=0; const int pad = 16;
 
@@ -1890,10 +2103,10 @@ void showDCOPWindow(const std::map<std::string,double>& Vmap,
 
         int yR = 70 + scrollR;
         for (auto& kv : elems) {
-            const std::string& ename = kv.first;
+            const string& ename = kv.first;
             double Iraw = kv.second;
 
-            bool isNaN = std::isnan(Iraw);
+            bool isNaN = isnan(Iraw);
             drawText(ename, midX + pad, yR);
             drawText(isNaN ? "N/A" : formatWithSI(Iraw, "A"), midX + pad + 160, yR);
             yR += 22;
@@ -1910,72 +2123,367 @@ void showDCOPWindow(const std::map<std::string,double>& Vmap,
 
 void runCircuit() {
     if (!isGroundPlaced) return;
-    circuit.reset();
+//    circuit.reset();
+//
+//    //string path = "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt";
+//    string path = "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt";
+//    ifstream in(path);
+//    if (!in.is_open()) { cerr << "didn't found: " << path << endl; return; }
+//
+//    vector<string> lines; string line;
+//    while (getline(in, line)) { if (!line.empty()) lines.push_back(line); }
+//    in.close();
+//
+//    for (const auto& l : lines) {
+//        string line2 = "add " + l;
+//        inputHandler(line2, circuit);
+//    }
 
-    std::string path = "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt";
-    ifstream in(path);
-    if (!in.is_open()) { cerr << "didn't found: " << path << endl; return; }
-
-    std::vector<std::string> lines; std::string line;
-    while (getline(in, line)) { if (!line.empty()) lines.push_back(line); }
-    in.close();
-
-    for (const auto& l : lines) {
-        std::string line2 = "add " + l;
-        inputHandler(line2, circuit);
-    }
+    buildCircuit(circuit);
 
     // --- جدید: محاسبه و نمایش DC‑OP (ولتاژها + جریان‌ها در یک پنجره) ---
     try {
-        std::map<std::string,double> Vmap, Imap;
+        map<string,double> Vmap, Imap;
         circuit.computeDCOP(Vmap, Imap);
 
         // چاپ ترمینال (اختیاری)
-        std::cout << "\nNodal Voltages (ground " << circuit.groundName << " = 0 V):\n";
-        for (auto& kv : Vmap) std::cout << kv.first << " = " << kv.second << " V\n";
-        std::cout << "\nElement Currents (A) [positive n1->n2]:\n";
+        cout << "\nNodal Voltages (ground " << circuit.groundName << " = 0 V):\n";
+        for (auto& kv : Vmap) cout << kv.first << " = " << kv.second << " V\n";
+        cout << "\nElement Currents (A) [positive n1->n2]:\n";
         for (auto& kv : Imap) {
-            if (std::isnan(kv.second)) std::cout << kv.first << " = N/A\n";
-            else                        std::cout << kv.first << " = " << kv.second << " A\n";
+            if (isnan(kv.second)) cout << kv.first << " = N/A\n";
+            else                        cout << kv.first << " = " << kv.second << " A\n";
         }
 
         showDCOPWindow(Vmap, Imap, circuit.groundName);
-    } catch (const std::exception& ex) {
-        std::cout << ex.what() << std::endl;
+    } catch (const exception& ex) {
+        cout << ex.what() << endl;
         return;
     }
 
-    std::cout << "[Run]" << std::endl;
+    cout << "[Run]" << endl;
 }
+
+static vector<double> logspace(double fStart, double fStop, int pointsPerDec) {
+    if (fStart <= 0.0 || fStop <= 0.0 || fStop < fStart) {
+        throw runtime_error("Invalid AC sweep range.");
+    }
+    if (pointsPerDec < 1) pointsPerDec = 1;
+
+    const double decades = log10(fStop) - log10(fStart);
+    const int N = max(2, int(ceil(decades * pointsPerDec)) + 1);
+
+    vector<double> f; f.reserve(N);
+    const double logStart = log10(fStart);
+    const double step     = (log10(fStop) - logStart) / double(N - 1);
+    for (int i = 0; i < N; ++i) f.push_back(pow(10.0, logStart + i * step));
+    // تضمین اولین/آخرین
+    f.front() = fStart; f.back() = fStop;
+    return f;
+}
+
+// حل AC در یک فرکانس با MNA (R/C/L + Vsrc/Isrc مستقل)
+// نکته‌ها:
+//  - در AC، DC-offset منابع نادیده گرفته می‌شود؛ از amplitude برای Vsrc استفاده شده.
+//  - برای Isrc اگر AC-amplitude ندارید، فعلاً
+
+static inline bool isValidProbeChar(char c) {
+    return isalnum((unsigned char)c) || c == '_' || c == '-';
+}
+
+static string chooseProbeNode(const Circuit& C) {
+    // اول: پایانه‌ی غیرزمینِ اولین منبع ولتاژ
+    for (auto* e : C.elements) {  // ← توجه: بدون ()
+        if (auto* v = dynamic_cast<VoltageSource*>(e)) {
+            const string n1 = v->getNode1()->getName();
+            const string n2 = v->getNode2()->getName();
+            if (n1 != C.groundName) return n1;
+            if (n2 != C.groundName) return n2;
+        }
+    }
+    // اگر نبود: اولین نود غیرزمین
+    for (auto* n : C.nodes) {      // ← توجه: بدون ()
+        if (n->getName() != C.groundName) return n->getName();
+    }
+    return {};
+}
+
+
+
+static bool solveACAtFrequency(
+        const Circuit& C, double freq,
+        map<string, cd>& outV)
+{
+    outV.clear();
+    if (freq <= 0.0) return false;
+
+
+    // 1) فهرست گره‌های مجهول (به‌جز زمین)
+    vector<Node*> nodes;
+    nodes.reserve(C.nodes.size());
+    for (auto* n : C.nodes) if (n->getName() != C.groundName) nodes.push_back(n);
+    const int N = (int)nodes.size();
+    if (N == 0) return true;
+
+    // 2) ولتاژسورس‌ها
+    vector<const VoltageSource*> vsrcs;
+    vsrcs.reserve(C.elements.size());
+    for (auto* e : C.elements) if (auto* v = dynamic_cast<VoltageSource*>(e)) vsrcs.push_back(v);
+    const int M = (int)vsrcs.size();
+
+    // 3) اندیس گره‌ها
+    map<string,int> idx;
+    for (int i=0;i<N;++i) idx[nodes[i]->getName()] = i;
+
+    // 4) ماتریس MNA: [Y  B; B^T 0] x [V; Ivs] = [I; E]
+    const int DIM = N + M;
+    const double w = 2.0 * M_PI * freq;
+
+    vector<vector<cd>> A(DIM, vector<cd>(DIM, cd(0,0)));
+    vector<cd> rhs(DIM, cd(0,0));
+
+    auto add = [&](int r, int c, cd v){ if (r>=0 && c>=0) A[r][c] += v; };
+
+    // 5) استمپ R/C/L و Isrc
+    for (auto* e : C.elements) {
+        const string a = e->getNode1()->getName();
+        const string b = e->getNode2()->getName();
+        const int ia = (a != C.groundName) ? idx[a] : -1;
+        const int ib = (b != C.groundName) ? idx[b] : -1;
+
+        if (auto* R = dynamic_cast<Resistor*>(e)) {
+            double r = R->getValue(); r = (r <= 1e-12 ? 1e-12 : r);
+            cd y = cd(1.0 / r, 0.0);
+            if (ia!=-1) add(ia, ia,  y);
+            if (ib!=-1) add(ib, ib,  y);
+            if (ia!=-1 && ib!=-1) { add(ia, ib, -y); add(ib, ia, -y); }
+        }
+        else if (auto* Cc = dynamic_cast<Capacitor*>(e)) {
+            double Cv = Cc->getValue(); Cv = (Cv < 0 ? 0 : Cv);
+            cd y = j * (w * Cv);
+            if (ia!=-1) add(ia, ia,  y);
+            if (ib!=-1) add(ib, ib,  y);
+            if (ia!=-1 && ib!=-1) { add(ia, ib, -y); add(ib, ia, -y); }
+        }
+        else if (auto* L = dynamic_cast<Inductor*>(e)) {
+            double Lv = L->getValue(); Lv = (Lv <= 0 ? 1e-12 : Lv);
+            cd y = cd(1.0, 0.0) / (j * (w * Lv));
+            if (ia!=-1) add(ia, ia,  y);
+            if (ib!=-1) add(ib, ib,  y);
+            if (ia!=-1 && ib!=-1) { add(ia, ib, -y); add(ib, ia, -y); }
+        }
+        else if (auto* I = dynamic_cast<CurrentSource*>(e)) {
+            // جریان مثبت از n1→n2
+            // رفتار اسپایسی: AC=0 مگر amplitude جداگانه داشته باشد.
+            cd Iac = cd(0.0, 0.0);
+            // اگر فیلدی مثل I->amplitude داری، از آن استفاده کن:
+            // Iac = cd(I->amplitude, 0.0);
+            if (ia!=-1) rhs[ia] +=  Iac;
+            if (ib!=-1) rhs[ib] += -Iac;
+        }
+    }
+
+    // 6) ولتاژسورس‌ها: ستون‌های اضافه و RHS
+    for (int k=0; k<M; ++k) {
+        const auto* vs = vsrcs[k];
+        const string a = vs->getNode1()->getName();
+        const string b = vs->getNode2()->getName();
+        const int ia = (a != C.groundName) ? idx[a] : -1;
+        const int ib = (b != C.groundName) ? idx[b] : -1;
+
+        const int col = N + k;
+        if (ia!=-1) { add(ia, col, cd(1,0)); add(col, ia, cd(1,0)); }
+        if (ib!=-1) { add(ib, col, -cd(1,0)); add(col, ib, -cd(1,0)); }
+
+        // RHS: در AC از amplitude استفاده کن؛ offset بی‌اثر است.
+        rhs[col] += cd(vs->amplitude, 0.0);
+        // اگر فاز خواستی بعداً: rhs[col] = amp * exp(j*phi);
+    }
+
+    // 7) حل دستگاه مختلط با گاوس (بدون تبدیل نادرست complex→double)
+    auto solveComplex = [&](vector<vector<cd>> M, vector<cd> b)->vector<cd>{
+        const int n = (int)M.size();
+        for (int i=0;i<n;++i){
+            // انتخاب پیوت
+            int piv = i;
+            for (int r=i+1;r<n;++r)
+                if (abs(M[r][i]) > abs(M[piv][i])) piv = r;
+            swap(M[i], M[piv]);
+            swap(b[i], b[piv]);
+
+            cd p = M[i][i];
+            if (abs(p) < 1e-18) throw SingularMatrixException();
+            for (int c=i;c<n;++c) M[i][c] /= p;
+            b[i] /= p;
+            for (int r=i+1;r<n;++r){
+                cd f = M[r][i];
+                if (f == cd(0,0)) continue;
+                for (int c=i;c<n;++c) M[r][c] -= f * M[i][c];
+                b[r] -= f * b[i];
+            }
+        }
+        vector<cd> x(n, cd(0,0));
+        for (int i=n-1;i>=0;--i){
+            x[i] = b[i];
+            for (int j=i+1;j<n;++j) x[i] -= M[i][j]*x[j];
+        }
+        return x;
+    };
+
+
+    (void)DIM; // سکوت هشدار unused
+
+    vector<cd> X = solveComplex(A, rhs);
+
+    // 8) خروجی: ولتاژ گره‌ها
+    for (int i=0;i<N;++i) outV[nodes[i]->getName()] = X[i];
+    return true;
+}
+
+
+
+// نمایش نتایج AC به‌صورت جدول (Freq, |V|, ∠V) شبیه پنجره DC
+static void showACSweepWindow(const vector<double>& f,
+                              const vector<double>& mag,
+                              const vector<double>& pha_deg,
+                              const string& nodeName)
+{
+    SDL_Window* w = SDL_CreateWindow(("AC Sweep: V(" + nodeName + ")").c_str(),
+                                     SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                     720, 520, SDL_WINDOW_SHOWN);
+    SDL_Renderer* r = SDL_CreateRenderer(w, -1, SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
+    TTF_Font* fnt = TTF_OpenFont("C:\\Windows\\Fonts\\Arial.ttf", 14);
+
+    auto text = [&](const string& s, int x, int y){
+        if (!fnt) return;
+        SDL_Color c{0,0,0};
+        SDL_Surface* sf = TTF_RenderText_Solid(fnt, s.c_str(), c);
+        if (!sf) return;
+        SDL_Texture* tx = SDL_CreateTextureFromSurface(r, sf);
+        SDL_Rect dst{x, y, sf->w, sf->h};
+        SDL_RenderCopy(r, tx, nullptr, &dst);
+        SDL_DestroyTexture(tx); SDL_FreeSurface(sf);
+    };
+
+    int scroll=0; bool quit=false; SDL_Event e;
+    while(!quit){
+        while(SDL_PollEvent(&e)){
+            if (e.type==SDL_QUIT) quit=true;
+            else if (e.type==SDL_KEYDOWN && e.key.keysym.sym==SDLK_ESCAPE) quit=true;
+            else if (e.type==SDL_MOUSEWHEEL) scroll += (e.wheel.y>0? 20 : -20);
+        }
+        SDL_SetRenderDrawColor(r,255,255,255,255); SDL_RenderClear(r);
+        text("Freq(Hz)", 20, 10);  text("|V| (V)", 200, 10);  text("Phase (deg)", 330, 10);
+        SDL_SetRenderDrawColor(r,0,0,0,255);
+        SDL_RenderDrawLine(r, 10, 30, 700, 30);
+
+        int y = 50 + scroll;
+        for (size_t i=0;i<f.size();++i){
+            text(fmt6(f[i]),          20,  y);
+            text(fmt6(mag[i]),       200,  y);
+            text(fmt6(pha_deg[i]),   330,  y);
+            y += 22;
+        }
+        SDL_RenderPresent(r);
+    }
+    if (fnt) TTF_CloseFont(fnt);
+    SDL_DestroyRenderer(r); SDL_DestroyWindow(w);
+}
+
+
+static vector<double> logspace(double fStart, double fStop, int num); // همونی که داری/یا معادل
+
+// اگر probeName خالی باشد، مثل قبل پروب خودکار انتخاب می‌شود
+void runACSweepFromCanvas(Circuit& C,
+                          double fStart, double fStop, int ptsPerDec,
+                          const string& probeName /* may be "" */)
+{
+    buildCircuit(C);
+
+    if (!(fStart > 0 && fStop > 0 && fStop >= fStart)) {
+        cout << "AC sweep params invalid.\n"; return;
+    }
+    if (ptsPerDec < 1) ptsPerDec = 1;
+
+    if (C.groundName.empty()) {
+        cout << "Ground node is not set.\n"; return;
+    }
+
+    // انتخاب پروب: یا از ورودی کاربر یا خودکار
+    string probe = probeName;
+    if (!probe.empty()) {
+        // ولیدیشن: گره وجود دارد و زمین نیست
+        bool exists = false;
+        for (auto* n : C.nodes) if (n->getName() == probe) { exists = true; break; }
+        if (!exists) { cout << "Probe node not found: " << probe << "\n"; return; }
+        if (probe == C.groundName) { cout << "Probe cannot be ground.\n"; return; }
+    } else {
+        probe = chooseProbeNode(C);
+        if (probe.empty()) { cout << "No non-ground node to probe.\n"; return; }
+    }
+
+    // تولید فرکانس‌ها (logspace مشابه قبل)
+    const double decades = log10(fStop / fStart);
+    const int num = max(2, int(round(decades * ptsPerDec)) + 1);
+    auto freqs = logspace(fStart, fStop, num);
+
+    vector<double> mags; mags.reserve(freqs.size());
+    vector<double> phs;  phs.reserve(freqs.size());
+
+    for (double f : freqs) {
+        map<string, cd> V;
+        if (!solveACAtFrequency(C, f, V)) { mags.push_back(0.0); phs.push_back(0.0); continue; }
+        auto it = V.find(probe);
+        cd v = (it == V.end()? cd(0.0,0.0) : it->second);
+        mags.push_back(abs(v));
+        phs.push_back(arg(v) * 180.0 / M_PI);
+    }
+
+    showACSweepWindow(freqs, mags, phs, "V(" + probe + ")");
+}
+
+
+
+
+// State for AC Sweep dialog
+string acStartText = "10";    // Hz
+string acStopText  = "10k";   // Hz
+string acPointsPerDecText = "10"; // points/decade
+string acProbeText = "n01"; // points/decade
+int acFocus = -1; // 0=start, 1=stop, 2=points
+static string acProbeNodeText;
 
 
 // ===== Run dialog state =====
 bool showRunDialog = false;
 
-enum RunChoice { RUN_DC, RUN_VT, RUN_IT };
+enum RunChoice { RUN_DC, RUN_VT, RUN_IT , RUN_AC };
 RunChoice runChoice = RUN_DC;
 
-std::string runNodeName = "";   // برای V–t
-std::string runElemName = "";   // برای I–t
+string runNodeName = "";   // برای V–t
+string runElemName = "";   // برای I–t
 
 enum RunField { RF_NONE, RF_NODE, RF_ELEM };
 RunField runFocus = RF_NONE;
 
+
+
 SDL_Rect runDialogRect = { 360, 180, 560, 200 }; // جای دیالوگ Run
 
 // اعلان توابع نمایش سیگنال
-void showSignalVT(const std::vector<double>& t,
-                  const std::vector<double>& y,
-                  const std::string& title,
-                  const std::string& yLabel);
-void showNodeVoltageVT(const WaveStore& ws, const std::string& nodeName);
-void showElementCurrentIT(const WaveStore& ws, const std::string& elemName);
+void showSignalVT(const vector<double>& t,
+                  const vector<double>& y,
+                  const string& title,
+                  const string& yLabel);
+void showNodeVoltageVT(const WaveStore& ws, const string& nodeName);
+void showElementCurrentIT(const WaveStore& ws, const string& elemName);
+
 
 // اگر هنوز simulateTransientCapture نداری، تابعش در بخش 2 آمده.
-void showSignalVT(const std::vector<double>& t,
-                  const std::vector<double>& y,
-                  const std::string& title,
-                  const std::string& yLabel) {
+void showSignalVT(const vector<double>& t,
+                  const vector<double>& y,
+                  const string& title,
+                  const string& yLabel) {
     if (t.empty() || y.empty() || t.size() != y.size()) return;
 
     SDL_Window* w = SDL_CreateWindow(title.c_str(),
@@ -1985,7 +2493,7 @@ void showSignalVT(const std::vector<double>& t,
 
     double tMin = t.front(), tMax = t.back();
     double yMin = y[0], yMax = y[0];
-    for (size_t i = 1; i < y.size(); ++i) { yMin = std::min(yMin, y[i]); yMax = std::max(yMax, y[i]); }
+    for (size_t i = 1; i < y.size(); ++i) { yMin = min(yMin, y[i]); yMax = max(yMax, y[i]); }
     if (fabs(yMax - yMin) < 1e-12) { yMax = yMin + 1.0; }
 
     auto X = [&](double tt, int W, int pad){ return pad + int((tt - tMin) * (W - 2*pad) / (tMax - tMin)); };
@@ -1995,7 +2503,7 @@ void showSignalVT(const std::vector<double>& t,
     SDL_Event e;
     const int pad = 50;
 
-    auto drawText = [&](const std::string& s, int x, int yPos){
+    auto drawText = [&](const string& s, int x, int yPos){
         if (!font2) return;
         SDL_Color black = {0,0,0};
         SDL_Surface* surf = TTF_RenderText_Solid(font2, s.c_str(), black);
@@ -2039,13 +2547,13 @@ void showSignalVT(const std::vector<double>& t,
     SDL_DestroyWindow(w);
 }
 
-void showNodeVoltageVT(const WaveStore& ws, const std::string& nodeName) {
+void showNodeVoltageVT(const WaveStore& ws, const string& nodeName) {
     auto it = ws.V.find(nodeName);
     if (it == ws.V.end()) return;
     showSignalVT(ws.t, it->second, "V(" + nodeName + ") vs t", "V (V)");
 }
 
-void showElementCurrentIT(const WaveStore& ws, const std::string& elemName) {
+void showElementCurrentIT(const WaveStore& ws, const string& elemName) {
     auto it = ws.I.find(elemName);
     if (it == ws.I.end()) return;
     showSignalVT(ws.t, it->second, "I(" + elemName + ") vs t", "I (A)");
@@ -2056,22 +2564,22 @@ void showElementCurrentIT(const WaveStore& ws, const std::string& elemName) {
 
 // گرد کردن به نزدیک‌ترین گره شبکه
 inline void snapToGrid(int x, int y, int& gx, int& gy) {
-    gx = (int)std::round((double)x / GRID_SPACING) * GRID_SPACING;
-    gy = (int)std::round((double)y / GRID_SPACING) * GRID_SPACING;
+    gx = (int)round((double)x / GRID_SPACING) * GRID_SPACING;
+    gy = (int)round((double)y / GRID_SPACING) * GRID_SPACING;
 }
 
 // اولویت: کانکتورهای موجود → شبکه
 inline void snapPointWithConnectorsFirst(int x, int y, int& outX, int& outY) {
     // 1) اگر نزدیک کانکتور موجود باشیم، به همان اسنپ کن
     for (const auto& c : allConnectors) {
-        if (std::abs(x - c.x) <= SNAP_BOX_HALF && std::abs(y - c.y) <= SNAP_BOX_HALF) {
+        if (abs(x - c.x) <= SNAP_BOX_HALF && abs(y - c.y) <= SNAP_BOX_HALF) {
             outX = c.x; outY = c.y;
             return;
         }
     }
     // 2) در غیر اینصورت، به شبکه اسنپ کن (در محدوده جذب 10x10)
     int gx, gy; snapToGrid(x, y, gx, gy);
-    if (std::abs(x - gx) <= SNAP_BOX_HALF && std::abs(y - gy) <= SNAP_BOX_HALF) {
+    if (abs(x - gx) <= SNAP_BOX_HALF && abs(y - gy) <= SNAP_BOX_HALF) {
         outX = gx; outY = gy;
     } else {
         // خارج محدوده جذب: اجازه نده روی بوم چیزی گذاشته شود (می‌تونی به نقطه خام برگردونی)
@@ -2088,6 +2596,8 @@ inline void drawGrid(SDL_Renderer* r, int W, int H) {
         }
     }
 }
+
+
 
 //================ Main Function =============================
 int main(int argc, char* argv[]) {
@@ -2115,9 +2625,14 @@ int main(int argc, char* argv[]) {
     ToolType selectedToolForDialog = NONE;
     string inputValueText = "";
     SDL_Rect valueDialogRect = { 400, 300, 300, 120 };
+    SDL_Rect vacDialogRect = { 380, 220, 420, 260 };
     double pendingValue = 0.0;   // مقدار بعد از OK
     bool   hasPendingValue = false;
-
+    bool showVACDialog = false;
+    string vacNameText, vacAmpText, vacFreqText, vacPhaseText;
+    int vacFocus = 0;
+    struct PendingVAC { string name; double  offset = 0.0,amp=0, freq=0, phase=0; } pendingVAC;
+    string vacOffsetText;
     // ===== Dialog state (add these) =====
     enum DialogField { FIELD_NAME, FIELD_VALUE };
     DialogField dialogFocus = FIELD_NAME;  // فوکوس اول روی نام
@@ -2163,17 +2678,101 @@ int main(int argc, char* argv[]) {
                     showPreview = false;
                 }
             }
+
+
             else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
                 cout << "x: " << e.button.x << " y: " << e.button.y << endl;
                 // --- RUN DIALOG CLICK HANDLER ---
+                // --- FIX 1: put this lambda once near start of event processing (inside while(SDL_PollEvent))
+                auto hit = [&](SDL_Rect r, int mx, int my)->bool {
+                    return mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h;
+                };
+
+// ... inside the existing mouse-left handler (no second vacDialogRect definition!)
+
+                if (showVACDialog) {
+                    SDL_Rect okBtn     = { vacDialogRect.x + vacDialogRect.w - 210, vacDialogRect.y + vacDialogRect.h - 50, 90, 28 };
+                    SDL_Rect cancelBtn = { okBtn.x + 105, okBtn.y, 90, 28 };
+                    int mx = e.button.x, my = e.button.y;
+
+                    if (hit(okBtn, mx, my)) {
+                        try {
+                            pendingVAC.name   = vacNameText.empty()? "VAC" : vacNameText;
+                            pendingVAC.offset = vacOffsetText.empty()? 0.0 : parseNumber(vacOffsetText);
+                            pendingVAC.amp    = parseNumber(vacAmpText);
+                            pendingVAC.freq   = parseNumber(vacFreqText);
+                            pendingVAC.phase  = vacPhaseText.empty()? 0.0 : parseNumber(vacPhaseText);
+
+                            showVACDialog = false;
+                            SDL_StopTextInput();
+                            currentTool = VSIN;   // وارد پیش‌نمایش
+                            showPreview = true;
+                            continue; // جلوگیری از نفوذ
+                        } catch(...) {
+                            cout << "Invalid AC inputs!\n";
+                        }
+                    } else if (hit(cancelBtn, mx, my)) {
+                        showVACDialog = false;
+                        SDL_StopTextInput();
+                        continue;
+                    }
+
+                    // فوکوس با کلیک روی باکس‌ها (اختیاری):
+                    int xL = vacDialogRect.x + 14, xR = vacDialogRect.x + 220;
+                    int y0 = vacDialogRect.y + 16, gap = 42, boxW = 170, boxH = 28;
+                    SDL_Rect boxName  { xR, y0-4,        boxW, boxH };
+                    SDL_Rect boxOffs  { xR, y0+gap-4,    boxW, boxH };
+                    SDL_Rect boxAmp   { xR, y0+2*gap-4,  boxW, boxH };
+                    SDL_Rect boxFreq  { xR, y0+3*gap-4,  boxW, boxH };
+                    SDL_Rect boxPhase { xR, y0+4*gap-4,  boxW, boxH };
+                    if      (hit(boxName,  mx,my)) { vacFocus = 0; SDL_StartTextInput(); continue; }
+                    else if (hit(boxOffs,  mx,my)) { vacFocus = 1; SDL_StartTextInput(); continue; }
+                    else if (hit(boxAmp,   mx,my)) { vacFocus = 2; SDL_StartTextInput(); continue; }
+                    else if (hit(boxFreq,  mx,my)) { vacFocus = 3; SDL_StartTextInput(); continue; }
+                    else if (hit(boxPhase, mx,my)) { vacFocus = 4; SDL_StartTextInput(); continue; }
+
+                    continue; // وقتی دیالوگ باز است، کلیک به پایین دسترس نداشته باشد
+                }
+
+                if (showVACDialog) {
+                    SDL_Rect okBtn     = { vacDialogRect.x + vacDialogRect.w - 210, vacDialogRect.y + vacDialogRect.h - 40, 90, 28 };
+                    SDL_Rect cancelBtn = { vacDialogRect.x + vacDialogRect.w - 105, vacDialogRect.y + vacDialogRect.h - 40, 90, 28 };
+                    int mx = e.button.x, my = e.button.y;
+
+                    if (mx >= okBtn.x && mx <= okBtn.x + okBtn.w && my >= okBtn.y && my <= okBtn.y + okBtn.h) {
+                        try {
+                            pendingVAC.name  = vacNameText.empty()? "VAC" : vacNameText;
+                            pendingVAC.amp   = parseNumber(vacAmpText);    // مثل فاز۱
+                            pendingVAC.freq  = parseNumber(vacFreqText);
+                            pendingVAC.phase = vacPhaseText.empty()? 0.0 : parseNumber(vacPhaseText);
+
+                            showVACDialog = false;
+                            SDL_StopTextInput();
+                            currentTool = VSIN;   // وارد فاز پیش‌نمایش
+                            showPreview = true;
+                            continue; // از نفوذ رویداد جلوگیری کن
+                        } catch (...) {
+                            cout << "Invalid AC inputs!" << endl;
+                        }
+                    } else if (mx >= cancelBtn.x && mx <= cancelBtn.x + cancelBtn.w &&
+                               my >= cancelBtn.y && my <= cancelBtn.y + cancelBtn.h) {
+                        showVACDialog = false;
+                        SDL_StopTextInput();
+                        continue;
+                    }
+                }
                 if (showRunDialog) {
+                    // مستطیل‌ها
                     SDL_Rect okBtn     = {runDialogRect.x + runDialogRect.w - 200, runDialogRect.y + runDialogRect.h - 40, 80, 28};
                     SDL_Rect cancelBtn = {okBtn.x + 100, okBtn.y, 80, 28};
-                    SDL_Rect rbDC      = {runDialogRect.x + 20,  runDialogRect.y + 20,  18, 18};
-                    //  SDL_Rect rbVT      = {runDialogRect.x + 20,  runDialogRect.y + 60,  18, 18};
-                    // SDL_Rect rbIT      = {runDialogRect.x + 20,  runDialogRect.y + 100, 18, 18};
-                    // SDL_Rect nodeBox   = {runDialogRect.x + 180, runDialogRect.y + 55,  runDialogRect.w - 200, 28};
-                    // SDL_Rect elemBox   = {runDialogRect.x + 180, runDialogRect.y + 95,  runDialogRect.w - 200, 28};
+                    SDL_Rect rbDC      = {runDialogRect.x + 20,  runDialogRect.y + 40,  18, 18};
+                    SDL_Rect rbAC      = {runDialogRect.x + 20,  runDialogRect.y + 70,  18, 18};
+
+                    // جعبه‌های AC
+                    SDL_Rect acStartBox = {runDialogRect.x + 180, runDialogRect.y + 65,  80, 24};
+                    SDL_Rect acStopBox  = {runDialogRect.x + 280, runDialogRect.y + 65,  80, 24};
+                    SDL_Rect acPtsBox   = {runDialogRect.x + 380, runDialogRect.y + 65,  80,  24};
+                    SDL_Rect acProbeBox = {runDialogRect.x + 480, runDialogRect.y + 65,  80,  24};
 
                     auto inRect = [&](SDL_Rect r)->bool{
                         return e.button.x >= r.x && e.button.x <= r.x + r.w &&
@@ -2185,39 +2784,56 @@ int main(int argc, char* argv[]) {
                         SDL_StopTextInput();
                         if (runChoice == RUN_DC) {
                             showRunDialog = false;
-                            runCircuit(); // همان اجرای DC قبلی
+                            runCircuit();
+                        } else if (runChoice == RUN_AC) {
+                            showRunDialog = false;
+                            double fStart = parseNumber(acStartText);
+                            double fStop  = parseNumber(acStopText);
+                            int    pDec   = max(1, atoi(acPointsPerDecText.c_str()));
+                            string probeName = acProbeNodeText;
+                            // قبلی:
+                            // runACSweepStub(circuit, fStart, fStop, pDec);
+
+                            // جدید:
+                            runACSweepFromCanvas(circuit, fStart, fStop, pDec, acProbeText);
+
                         } else if (runChoice == RUN_VT) {
-                            std::string node = runNodeName.empty()? "n1" : runNodeName;
+                            string node = runNodeName.empty()? "n1" : runNodeName;
                             showRunDialog = false;
                             circuit.simulateTransientCapture(gWaves);
                             showNodeVoltageVT(gWaves, node);
                         } else { // RUN_IT
-                            std::string elem = runElemName.empty()? "R1" : runElemName;
+                            string elem = runElemName.empty()? "R1" : runElemName;
                             showRunDialog = false;
                             circuit.simulateTransientCapture(gWaves);
                             showElementCurrentIT(gWaves, elem);
                         }
-                        continue; // کلیک به UI زیر نفوذ نکند
+                        continue;
                     }
 
                     // Cancel
                     if (inRect(cancelBtn)) { showRunDialog = false; SDL_StopTextInput(); continue; }
 
                     // انتخاب نوع تحلیل
-                    if (inRect(rbDC))  { runChoice = RUN_DC;  runFocus = RF_NONE;                continue; }
-                    //   if (inRect(rbVT))  { runChoice = RUN_VT;  runFocus = RF_NODE; SDL_StartTextInput(); continue; }
-                    // if (inRect(rbIT))  { runChoice = RUN_IT;  runFocus = RF_ELEM; SDL_StartTextInput(); continue; }
+                    if (inRect(rbDC))  { runChoice = RUN_DC; acFocus = -1; runFocus = RF_NONE; continue; }
+                    if (inRect(rbAC))  { runChoice = RUN_AC; runFocus = RF_NONE; acFocus = 0; SDL_StartTextInput(); continue; }
 
-                    // فوکوس فیلدها
-                    // if (inRect(nodeBox)) { runChoice = RUN_VT; runFocus = RF_NODE; SDL_StartTextInput(); continue; }
-                    // if (inRect(elemBox)) { runChoice = RUN_IT; runFocus = RF_ELEM; SDL_StartTextInput(); continue; }
+                    // فوکوس روی فیلدهای AC وقتی RUN_AC انتخاب شده
+                    if (runChoice == RUN_AC) {
+                        if (inRect(acStartBox)) { acFocus = 0; SDL_StartTextInput(); continue; }
+                        if (inRect(acStopBox))  { acFocus = 1; SDL_StartTextInput(); continue; }
+                        if (inRect(acPtsBox))   { acFocus = 2; SDL_StartTextInput(); continue; }
+                        if (inRect(acProbeBox)) { acFocus = 3; SDL_StartTextInput(); continue; }
+                    }
 
-                    // کلیک بیرون از دیالوگ → نادیده بگیر
+                    // کلیک بیرون از دیالوگ → نادیده
                     if (!(e.button.x >= runDialogRect.x && e.button.x <= runDialogRect.x + runDialogRect.w &&
                           e.button.y >= runDialogRect.y && e.button.y <= runDialogRect.y + runDialogRect.h)) {
                         continue;
                     }
                 }
+                SDL_Rect vacDialogRect = { 380, 220, 420, 220 }; // اگر بیرون اسکوپ لازمش نداری، همین‌جا تعریف باشه
+
 
                 if (showValueDialog) {
                     // نواحی قابل کلیک داخل دیالوگ
@@ -2229,7 +2845,7 @@ int main(int argc, char* argv[]) {
                     if (e.button.x >= okButton.x && e.button.x <= okButton.x + okButton.w &&
                         e.button.y >= okButton.y && e.button.y <= okButton.y + okButton.h) {
                         try {
-                            if (inputNameText.empty()) throw std::runtime_error("empty name");
+                            if (inputNameText.empty()) throw runtime_error("empty name");
                             double val = parseNumber(inputValueText);  // k/u/m/e… پشتیبانی می‌شود
 
                             preX = 545;
@@ -2249,7 +2865,7 @@ int main(int argc, char* argv[]) {
 
                             continue; // جلوگیری از نفوذ این کلیک به بقیه‌ی هندلرها
                         } catch (...) {
-                            std::cout << "Invalid name/value!" << std::endl;
+                            cout << "Invalid name/value!" << endl;
                         }
                         continue;
                     }
@@ -2279,6 +2895,7 @@ int main(int argc, char* argv[]) {
                             break;
                         case 2:
                             saveCircuitToFile("C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt");
+//                            saveCircuitToFile("C:\\\\Users\\\\Informatic Iran\\\\Desktop\\\\circ\\\\salam.txt");
                             break;
                     }
                     fileClicked = false;
@@ -2302,14 +2919,27 @@ int main(int argc, char* argv[]) {
                     else if (mx >= 270 && mx <= 300) currentTool = CSOURCE;
                     else if (mx >= 330 && mx <= 360) currentTool = GROUND;
                     else if (mx >= 390 && mx <= 420) currentTool = WIRE;
+                    else if (mx >= 450 && mx <= 480) currentTool = VSIN;
 
                     // محدوده‌ی ابزارهای غیر از GROUND/WIRE: 30..330
+                    if (currentTool == VSIN) {
+                        showVACDialog = true;
+                        vacNameText.clear();
+                        vacOffsetText.clear();
+                        vacAmpText.clear();
+                        vacFreqText.clear();
+                        vacPhaseText.clear();
+                        vacFocus = 0;
+                        currentTool = NONE;        // فعلاً ابزار غیرفعال تا OK
+                        SDL_StartTextInput();
+                    }
+
                     if (mx >= 30 && mx <= 330) {
+
                         if (currentTool != GROUND && currentTool != WIRE) {
                             selectedToolForDialog = currentTool;
                             currentTool = NONE;
                             showValueDialog = true;
-
                             inputNameText.clear();             // ← نام خالی
                             inputValueText.clear();            // ← مقدار خالی
                             dialogFocus = FIELD_NAME;          // ← فوکوس ابتدا روی نام
@@ -2317,6 +2947,7 @@ int main(int argc, char* argv[]) {
                         }
                     }
                 } else if (my > 75) {
+
                     if (currentTool == WIRE) {
                         if (!wireStartSelected) {
                             int sx, sy;
@@ -2356,7 +2987,28 @@ int main(int argc, char* argv[]) {
 //                            currentTool = NONE;
 //                            showPreview = false;
 //                        }
-                    } else if (currentTool != NONE) {
+                    }
+                    else if (currentTool == VSIN) {
+                        int cx, cy; snapPointWithConnectorsFirst(mx, my, cx, cy);
+                        PlacedElement e{};  // ← صفر-مقداردهی ایمن
+                        e.type  = VSIN;
+                        e.x     = cx;
+                        e.y     = cy;
+                        e.name  = pendingVAC.name.empty()? "VAC" : pendingVAC.name;
+                        e.value = pendingVAC.offset;   // ← offset (DC) را حتماً ست کن
+                        e.amp   = pendingVAC.amp;
+                        e.freq  = pendingVAC.freq;
+                        e.phase = pendingVAC.phase;    // فعلاً در ذخیره‌سازی استفاده نمی‌شود
+                        placedElements.push_back(e);
+                        // ⬇⬇⬇ این ۳ خط را اضافه کن
+                        currentTool = NONE;
+                        showPreview = false;
+                        // (اختیاری) پاک‌سازی بافرها
+                        pendingVAC = {};
+
+                    }
+
+                    else if (currentTool != NONE) {
 
                         // Snap element end if near existing connector
                         int cx = mx, cy = my; snapPointWithConnectorsFirst(mx, my, cx, cy);
@@ -2388,7 +3040,7 @@ int main(int argc, char* argv[]) {
                         // ask for value and place element at snapped position
 
                         double val = hasPendingValue ? pendingValue : 10.0;
-                        std::string nm = (hasPendingName ? pendingName : std::string(""));
+                        string nm = (hasPendingName ? pendingName : string(""));
 
                         placedElements.push_back({ currentTool, cx, cy, nm, val });
 
@@ -2402,6 +3054,67 @@ int main(int argc, char* argv[]) {
                     }
                 }
             }
+            // TEXTINPUT
+            if (e.type == SDL_TEXTINPUT) {
+                if      (vacFocus == 0) vacNameText   += e.text.text;
+                else if (vacFocus == 1) vacOffsetText += e.text.text; // ← جدید
+                else if (vacFocus == 2) vacAmpText    += e.text.text;
+                else if (vacFocus == 3) vacFreqText   += e.text.text;
+                else if (vacFocus == 4) vacPhaseText  += e.text.text;
+            }
+                // KEYDOWN
+            else if (e.type == SDL_KEYDOWN) {
+                if (e.key.keysym.sym == SDLK_BACKSPACE) {
+                    string* target =
+                            (vacFocus==0 ? &vacNameText :
+                             (vacFocus==1 ? &vacOffsetText :
+                              (vacFocus==2 ? &vacAmpText  :
+                               (vacFocus==3 ? &vacFreqText : &vacPhaseText))));
+                    if (!target->empty()) target->pop_back();
+                } else if (e.key.keysym.sym == SDLK_TAB) {
+                    vacFocus = (vacFocus + 1) % 5; // ← 5 فیلد داریم
+                }
+            }
+
+
+            // --- PATCH C1: handle SDL_TEXTINPUT for AC fields ---
+            if (showRunDialog && runChoice == RUN_AC && e.type == SDL_TEXTINPUT) {
+                const char* txt = e.text.text;
+                string* target = nullptr;
+                if      (acFocus == 0) target = &acStartText;
+                else if (acFocus == 1) target = &acStopText;
+                else if (acFocus == 2) target = &acPointsPerDecText;
+                else if (acFocus == 3) target = &acProbeText;
+
+                if (target) {
+                    // اجازه به اعداد/نقطه/حروف واحد: kKmMuUnN و e/E
+                    for (const char* p = txt; *p; ++p) {
+                        char ch = *p;
+                        if (isdigit((unsigned char)ch) || ch=='.' || ch=='e' || ch=='E' ||
+                            ch=='k'||ch=='K'||ch=='m'||ch=='M'||ch=='u'||ch=='U'||ch=='n'||ch=='N') {
+                            target->push_back(ch);
+                        }
+                    }
+                }
+            }
+
+            // --- PATCH C2: handle SDL_KEYDOWN for AC fields ---
+            if (showRunDialog && runChoice == RUN_AC && e.type == SDL_KEYDOWN) {
+                if (e.key.keysym.sym == SDLK_BACKSPACE) {
+                    string* target = nullptr;
+                    if      (acFocus == 0) target = &acStartText;
+                    else if (acFocus == 1) target = &acStopText;
+                    else if (acFocus == 2) target = &acPointsPerDecText;
+                    else if (acFocus == 3) target = &acProbeText;
+                    if (target && !target->empty()) target->pop_back();
+                } else if (e.key.keysym.sym == SDLK_TAB) {
+                    acFocus = (acFocus + 1) % 4;
+                } else if (e.key.keysym.sym == SDLK_ESCAPE) {
+                    // اختیاری: بستن دیالوگ
+                    // showRunDialog = false; SDL_StopTextInput();
+                }
+            }
+
             else if (showValueDialog) {
                 if (e.type == SDL_TEXTINPUT) {
                     const char* txt = e.text.text;
@@ -2409,7 +3122,7 @@ int main(int argc, char* argv[]) {
                         // فقط حروف/عدد/زیرخط برای نام (سلیقه‌ای)
                         for (const char* p = txt; *p; ++p) {
                             char ch = *p;
-                            if (std::isalnum((unsigned char)ch) || ch == '_') {
+                            if (isalnum((unsigned char)ch) || ch == '_') {
                                 inputNameText.push_back(ch);
                             }
                         }
@@ -2417,7 +3130,7 @@ int main(int argc, char* argv[]) {
                         // کاراکترهای رایج مقدار: اعداد، اعشار، منفی، e/E و prefixed (k,m,u,n,M,K)
                         for (const char* p = txt; *p; ++p) {
                             char ch = *p;
-                            if (std::isdigit((unsigned char)ch) || ch=='.' || ch=='-' || ch=='e' || ch=='E' ||
+                            if (isdigit((unsigned char)ch) || ch=='.' || ch=='-' || ch=='e' || ch=='E' ||
                                 ch=='k'||ch=='K'||ch=='m'||ch=='u'||ch=='U'||ch=='n'||ch=='M') {
                                 inputValueText.push_back(ch);
                             }
@@ -2427,11 +3140,11 @@ int main(int argc, char* argv[]) {
                     if (e.key.keysym.sym == SDLK_TAB) {
                         dialogFocus = (dialogFocus == FIELD_NAME) ? FIELD_VALUE : FIELD_NAME;
                     } else if (e.key.keysym.sym == SDLK_BACKSPACE) {
-                        std::string &target = (dialogFocus == FIELD_NAME) ? inputNameText : inputValueText;
+                        string &target = (dialogFocus == FIELD_NAME) ? inputNameText : inputValueText;
                         if (!target.empty()) target.pop_back();
                     } else if (e.key.keysym.sym == SDLK_RETURN) {
                         try {
-                            if (inputNameText.empty()) throw std::runtime_error("empty name");
+                            if (inputNameText.empty()) throw runtime_error("empty name");
                             double val = parseNumber(inputValueText);
                             pendingValue = val;
                             hasPendingValue = true;
@@ -2444,7 +3157,7 @@ int main(int argc, char* argv[]) {
                             selectedToolForDialog = NONE;
                             showPreview = true;
                         } catch (...) {
-                            std::cout << "Invalid name/value!" << std::endl;
+                            cout << "Invalid name/value!" << endl;
                         }
                     } else if (e.key.keysym.sym == SDLK_ESCAPE) {
                         showValueDialog = false;
@@ -2486,7 +3199,7 @@ int main(int argc, char* argv[]) {
         drawGrid(renderer, winW, winH);
 
         drawMenuBar(renderer, font);
-        drawToolbar(renderer);
+        drawToolbar(renderer, font);
         drawPlacedElements(renderer);
         drawWires(renderer, wires);
         if (showFileMenu) drawFileDropdown(renderer, font);
@@ -2583,7 +3296,77 @@ int main(int argc, char* argv[]) {
                 SDL_FreeSurface(okSurf);
             }
         }
+        if (showVACDialog) {
+            // بک‌گراند
+            SDL_SetRenderDrawColor(renderer, 200,200,200,255);
+            SDL_RenderFillRect(renderer, &vacDialogRect);
+            SDL_SetRenderDrawColor(renderer, 0,0,0,255);
+            SDL_RenderDrawRect(renderer, &vacDialogRect);
+
+            auto drawLbl = [&](const char* txt, int x, int y){
+                SDL_Color black{0,0,0};
+                SDL_Surface* s = TTF_RenderText_Solid(font, txt, black);
+                if (!s) return;
+                SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
+                SDL_Rect dst{ x, y, s->w, s->h };
+                SDL_RenderCopy(renderer, t, nullptr, &dst);
+                SDL_DestroyTexture(t); SDL_FreeSurface(s);
+            };
+            auto drawBox = [&](const string& val, int x, int y, int w, int h, bool focused){
+                SDL_Rect box{ x, y, w, h };
+                SDL_SetRenderDrawColor(renderer, 255,255,255,255);
+                SDL_RenderFillRect(renderer, &box);
+                SDL_SetRenderDrawColor(renderer, focused? 0:80, focused? 120:80, focused? 255:80, 255);
+                SDL_RenderDrawRect(renderer, &box);
+
+                SDL_Color black{0,0,0};
+                const char* txt = val.empty()? "e.g. 1k / 2.2m / 10u" : val.c_str();
+                SDL_Surface* s = TTF_RenderText_Solid(font, txt, black);
+                if (s) {
+                    SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
+                    SDL_Rect dst{ x+6, y+(h - s->h)/2, s->w, s->h };
+                    SDL_RenderCopy(renderer, t, nullptr, &dst);
+                    SDL_DestroyTexture(t); SDL_FreeSurface(s);
+                }
+            };
+
+            int xL = vacDialogRect.x + 14;
+            int xR = vacDialogRect.x + 220;
+            int y0 = vacDialogRect.y + 16;
+            int gap = 42;
+            int boxW = 170, boxH = 28;
+
+            drawLbl("Name:", xL, y0);
+            drawBox(vacNameText, xR, y0-4, boxW, boxH, vacFocus==0);
+
+            drawLbl("DC Offset (V):", xL, y0 + gap);
+            drawBox(vacOffsetText, xR, y0 + gap - 4, boxW, boxH, vacFocus==1);
+
+            drawLbl("Amplitude (V):", xL, y0 + 2*gap);
+            drawBox(vacAmpText,   xR, y0 + 2*gap - 4, boxW, boxH, vacFocus==2);
+
+            drawLbl("Frequency (Hz):", xL, y0 + 3*gap);
+            drawBox(vacFreqText,  xR, y0 + 3*gap - 4, boxW, boxH, vacFocus==3);
+
+            drawLbl("Phase (deg):", xL, y0 + 4*gap);
+            drawBox(vacPhaseText, xR, y0 + 4*gap - 4, boxW, boxH, vacFocus==4);
+
+
+            SDL_Rect okBtn     = { vacDialogRect.x + vacDialogRect.w - 210, vacDialogRect.y + vacDialogRect.h - 40, 90, 28 };
+            SDL_Rect cancelBtn = { vacDialogRect.x + vacDialogRect.w - 105, vacDialogRect.y + vacDialogRect.h - 40, 90, 28 };
+
+            SDL_SetRenderDrawColor(renderer, 180,180,180,255);
+            SDL_RenderFillRect(renderer, &okBtn);
+            SDL_RenderFillRect(renderer, &cancelBtn);
+            SDL_SetRenderDrawColor(renderer, 0,0,0,255);
+            SDL_RenderDrawRect(renderer, &okBtn);
+            SDL_RenderDrawRect(renderer, &cancelBtn);
+
+            drawLbl("OK",     okBtn.x + 30, okBtn.y + 5);
+            drawLbl("Cancel", cancelBtn.x + 18, cancelBtn.y + 5);
+        }
 // --- RENDER RUN DIALOG ---
+        // --- PATCH B: Render Run dialog (add AC UI) ---
         if (showRunDialog) {
             SDL_SetRenderDrawColor(renderer, 220, 220, 220, 255);
             SDL_RenderFillRect(renderer, &runDialogRect);
@@ -2591,7 +3374,7 @@ int main(int argc, char* argv[]) {
             SDL_RenderDrawRect(renderer, &runDialogRect);
 
             SDL_Color black = {0,0,0};
-            auto drawText = [&](const std::string& s, int x, int y){
+            auto drawText = [&](const string& s, int x, int y){
                 SDL_Surface* surf = TTF_RenderText_Solid(font, s.c_str(), black);
                 if (!surf) return;
                 SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
@@ -2603,55 +3386,54 @@ int main(int argc, char* argv[]) {
             drawText("Select analysis type", runDialogRect.x + 16, runDialogRect.y + 8);
 
             SDL_Rect rbDC = {runDialogRect.x + 20,  runDialogRect.y + 40,  18, 18};
-            //SDL_Rect rbVT = {runDialogRect.x + 20,  runDialogRect.y + 60,  18, 18};
-            //SDL_Rect rbIT = {runDialogRect.x + 20,  runDialogRect.y + 100, 18, 18};
+            SDL_Rect rbAC = {runDialogRect.x + 20,  runDialogRect.y + 70,  18, 18};
 
             // DC
             SDL_RenderDrawRect(renderer, &rbDC);
             if (runChoice == RUN_DC) SDL_RenderFillRect(renderer, &rbDC);
             drawText("DC (solve nodal voltages)", rbDC.x + 30, rbDC.y - 2);
 
-            // V–t
-            //SDL_RenderDrawRect(renderer, &rbVT);
-            //if (runChoice == RUN_VT) SDL_RenderFillRect(renderer, &rbVT);
-            //drawText("Transient V–t (node):", rbVT.x + 30, rbVT.y - 2);
+            // AC
+            SDL_RenderDrawRect(renderer, &rbAC);
+            if (runChoice == RUN_AC) SDL_RenderFillRect(renderer, &rbAC);
+            drawText("AC Sweep (log decade)", rbAC.x + 30, rbAC.y - 2);
 
-            // SDL_Rect nodeBox = {runDialogRect.x + 180, runDialogRect.y + 55, runDialogRect.w - 200, 28};
-            // SDL_SetRenderDrawColor(renderer, 255,255,255,255);
-            // SDL_RenderFillRect(renderer, &nodeBox);
-            // SDL_SetRenderDrawColor(renderer, 0,0,0,255);
-            // SDL_RenderDrawRect(renderer, &nodeBox);
-            // {
-            //     const char* toShow = runNodeName.empty()? "e.g. n1" : runNodeName.c_str();
-            //     SDL_Surface* s = TTF_RenderText_Solid(font, toShow, black);
-            //     if (s) {
-            //         SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
-            //         SDL_Rect r = {nodeBox.x + 6, nodeBox.y + 6, s->w, s->h};
-            //         SDL_RenderCopy(renderer, t, nullptr, &r);
-            //         SDL_DestroyTexture(t); SDL_FreeSurface(s);
-            //     }
-            // }
+            // فیلدهای AC (روی یک ردیف)
+            SDL_Rect acStartBox = {runDialogRect.x + 180, runDialogRect.y + 65,  80, 24};
+            SDL_Rect acStopBox  = {runDialogRect.x + 280, runDialogRect.y + 65,  80, 24};
+            SDL_Rect acPtsBox   = {runDialogRect.x + 380, runDialogRect.y + 65,  80,  24};
+            SDL_Rect acProbeBox   = {runDialogRect.x + 480, runDialogRect.y + 65,  80,  24};
 
-            // I–t
-            //SDL_RenderDrawRect(renderer, &rbIT);
-            //if (runChoice == RUN_IT) SDL_RenderFillRect(renderer, &rbIT);
-            //drawText("Transient I–t (element):", rbIT.x + 30, rbIT.y - 2);
+            auto drawBox = [&](SDL_Rect box, const string& val, bool focused, const char* placeholder){
+                SDL_SetRenderDrawColor(renderer, 255,255,255,255);
+                SDL_RenderFillRect(renderer, &box);
+                SDL_SetRenderDrawColor(renderer, 0,0,0,255);
+                SDL_RenderDrawRect(renderer, &box);
+                if (focused) SDL_RenderDrawRect(renderer, &box);
 
-            // SDL_Rect elemBox = {runDialogRect.x + 180, runDialogRect.y + 95, runDialogRect.w - 200, 28};
-            // SDL_SetRenderDrawColor(renderer, 255,255,255,255);
-            // SDL_RenderFillRect(renderer, &elemBox);
-            // SDL_SetRenderDrawColor(renderer, 0,0,0,255);
-            // SDL_RenderDrawRect(renderer, &elemBox);
-            // {
-            //  const char* toShow = runElemName.empty()? "e.g. R1" : runElemName.c_str();
-            //SDL_Surface* s = TTF_RenderText_Solid(font, toShow, black);
-            // if (s) {
-            //     SDL_Texture* t = SDL_CreateTextureFromSurface(renderer, s);
-            //     SDL_Rect r = {elemBox.x + 6, elemBox.y + 6, s->w, s->h};
-            //     SDL_RenderCopy(renderer, t, nullptr, &r);
-            //     SDL_DestroyTexture(t); SDL_FreeSurface(s);
-            // }
-            // }
+                const string& s = val.empty()? string(placeholder) : val;
+                SDL_Surface* surf = TTF_RenderText_Solid(font, s.c_str(), black);
+                if (surf) {
+                    SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+                    SDL_Rect r = { box.x + 6, box.y + 4, surf->w, surf->h };
+                    SDL_RenderCopy(renderer, tex, nullptr, &r);
+                    SDL_DestroyTexture(tex); SDL_FreeSurface(surf);
+                }
+            };
+
+            if (runChoice == RUN_AC) {
+                drawText("Start (Hz)", acStartBox.x, acStartBox.y - 18);
+                drawBox(acStartBox, acStartText, (acFocus==0), "e.g. 10");
+
+                drawText("Stop (Hz)",  acStopBox.x,  acStopBox.y  - 18);
+                drawBox(acStopBox,  acStopText,  (acFocus==1), "e.g. 10k");
+
+                drawText("Pts/dec",    acPtsBox.x,   acPtsBox.y   - 18);
+                drawBox(acPtsBox,   acPointsPerDecText, (acFocus==2), "10");
+
+                drawText("Probe Node:",    acProbeBox.x,   acProbeBox.y   - 18);
+                drawBox(acProbeBox,   acProbeText, (acFocus==3), "n01");
+            }
 
             // Buttons
             SDL_Rect okBtn  = {runDialogRect.x + runDialogRect.w - 200, runDialogRect.y + runDialogRect.h - 40, 80, 28};
@@ -2665,6 +3447,7 @@ int main(int argc, char* argv[]) {
             drawText("OK", okBtn.x + 28, okBtn.y + 5);
             drawText("Cancel", cancelBtn.x + 14, cancelBtn.y + 5);
         }
+
 
 
 
