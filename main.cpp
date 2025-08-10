@@ -1790,18 +1790,18 @@ vector<string> generateAddCommands() {
     }
 
     // 4) سیم‌ها مثل قبل: R Wi node1 node2 0
-    int wireIndex = 1;
-    for (const auto& w : wires) {
-        int id1 = addConnector(w.first.x,  w.first.y);
-        int id2 = addConnector(w.second.x, w.second.y);
-
-        string node1 = connectorToNode[id1];
-        string node2 = connectorToNode[id2];
-
-        string name = "W" + to_string(wireIndex++);
-        string line = "R " + name + " " + node1 + " " + node2 + " 0";
-        commands.push_back(line);
-    }
+//    int wireIndex = 1;
+//    for (const auto& w : wires) {
+//        int id1 = addConnector(w.first.x,  w.first.y);
+//        int id2 = addConnector(w.second.x, w.second.y);
+//
+//        string node1 = connectorToNode[id1];
+//        string node2 = connectorToNode[id2];
+//
+//        string name = "W" + to_string(wireIndex++);
+//        string line = "R " + name + " " + node1 + " " + node2 + " 0";
+//        commands.push_back(line);
+//    }
 
     return commands;
 }
