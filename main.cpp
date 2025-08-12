@@ -1,17 +1,23 @@
 #include <bits/stdc++.h>
-#include <math.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL2_gfx.h>
 #include <fstream>
 #include <sstream>
 #include <complex>
-#include <vector>
-#include <string>
-#include <map>
-#include <complex>
-#include <cmath>
-#include <algorithm>
+
+
+#include <cereal/archives/json.hpp>
+#include <cereal/types/vector.hpp>
+#include <cereal/types/string.hpp>
+#include <cereal/types/memory.hpp>
+#include <cereal/types/polymorphic.hpp>
+
+#include "save_load.h"
+#include "win_save_dialog.h"
+#include "win_open_dialog.h"
+
+
 
 using namespace std;
 
@@ -81,17 +87,6 @@ double parseNumber(string input) {
     return result;
 }
 
-string preprocessInput(const string& input) {
-    regex gndRegex(R"(^\s*G\s+(\S+)\s*$)", regex::icase);
-    std:smatch match;
-    if (regex_match(input, match, gndRegex)) {
-        // match[1] نام گره هست
-        return "add G " + match[1].str();
-    }
-    // اگر خط با G نبود، همون خط اصلی برگردونده میشه
-    return input;
-}
-
 //================ Schematic Structure & Global Storage ============
 struct Schematic {
     string name;
@@ -101,14 +96,6 @@ struct Schematic {
 
 vector<Schematic> gSchematics;
 
-// Extracts a file name from a given file path
-string extractFileName(const string &filePath) {
-    size_t pos = filePath.find_last_of("/\\");
-    if (pos != string::npos)
-        return filePath.substr(pos+1);
-    else
-        return filePath;
-}
 // ===== Wave storage =====
 struct WaveStore {
     vector<double> t;                        // time (s)
@@ -269,7 +256,6 @@ public:
     double timeStep = 0.001;
     int totalSteps = 1000;
 
-    string schematicPath = "";
 
     ~Circuit() {
         for (auto node : nodes)
@@ -288,7 +274,6 @@ public:
         elements.clear();
 
         groundName = "";
-        schematicPath = "";
     }
 
     Node* getOrCreateNode(const string& nodeName) {
@@ -876,543 +861,6 @@ bool Circuit::computeNodalVoltages(map<string,double>& outV) const {
 
 
 Circuit circuit;
-int menuLevel = 0;
-
-void loadNewFile(const string &filePath) {
-    ofstream infile(filePath, ios::app);
-    if (!infile) {
-        cout << "Error: Could not open file: " << filePath << endl;
-        return;
-    }
-
-    bool exists = false;
-    // ifstream schList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
-    ifstream schList("C:\\\\Users\\\\Informatic Iran\\\\Desktop\\\\opu_savedfiles\\\\thelist.txt");
-    string line;
-    while (getline(schList, line)) {
-        if (line == filePath) {
-            exists = true;
-            break;
-        }
-    }
-    schList.close();
-
-    infile.close();
-    if (!exists) {
-        // ofstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt", ios::app);
-        ofstream schematicsList("C:\\\\Users\\\\Informatic Iran\\\\Desktop\\\\opu_savedfiles\\\\thelist.txt", ios::app);
-        schematicsList << filePath << endl;
-        schematicsList.close();
-    }
-
-    cout << "Schematic loaded: " << extractFileName(filePath) << endl;
-}
-
-void showSchematicsMenu() {
-    gSchematics.clear();
-    ///ifstream schematicsList("C:\\\\Users\\\\Ared\\\\Desktop\\\\schList\\\\schList.txt");
-    ifstream schematicsList("C:\\\\Users\\\\Informatic Iran\\\\Desktop\\\\opu_savedfiles\\\\thelist.txt");
-    string schematicPath;
-    while(getline(schematicsList, schematicPath)) {
-        ifstream infile(schematicPath);
-        if (infile.is_open()) {
-            Schematic sch;
-            sch.name = extractFileName(schematicPath);
-            sch.schematichPath = schematicPath;
-            string line;
-            while(getline(infile, line)) {
-                // (Optionally: skip empty lines or comments)
-                if (!line.empty())
-                    sch.lines.push_back(line);
-            }
-            infile.close();
-            gSchematics.push_back(sch);
-        }
-    }
-    schematicsList.close();
-
-    if(gSchematics.empty()) {
-        cout << "No schematics available." << endl;
-        return;
-    }
-    cout << "\nChoose existing schematic:" << endl;
-    for (size_t i = 0; i < gSchematics.size(); i++) {
-        cout << (i+1) << "- " << gSchematics[i].name << endl;
-    }
-    menuLevel = 1;
-    cout << "Enter the schematic number (or type 'return' to go back):" << endl;
-}
-
-//================ Command Parsing Functions ====================
-// Returns a vector of tokens; the first token identifies the command.
-vector<string> parseCommandLine(const string &cmd) {
-    vector<string> tokens;
-    smatch match;
-    menuLevel = 2;
-    if (menuLevel == 0 ) {
-
-        // NewFile command: "NewFile <file_path>"
-        if (regex_match(cmd, match, regex(R"(NewFile\s+([^ ]+))"))) {
-            tokens.push_back("NewFile");
-            tokens.push_back(match[1].str());
-            return tokens;
-        }
-        // show existing schematics: exactly "-show existing schematics"
-        if (regex_match(cmd, match, regex(R"(^-show\s+existing\s+schematics$)"))) {
-            tokens.push_back("showSchematics");
-            return tokens;
-        }
-    }
-
-    if (menuLevel == 1) {
-        // choose schematic: "<number>"
-        if (regex_match(cmd, match, regex(R"(([^ ]+))"))) {
-            tokens.push_back("chooseSchematic");
-            tokens.push_back(match[1].str());
-            return tokens;
-        }
-    }
-
-    if (menuLevel == 2) {
-
-        // exit existing schematics: exactly "-exit existing schematics"
-        if (regex_match(cmd, match, regex(R"(^-exit\s+existing\s+schematics$)"))) {
-            tokens.push_back("exitSchematics");
-            return tokens;
-        }
-        // save existing schematics: exactly "-save existing schematics"
-        if (regex_match(cmd, match, regex(R"(^-save\s+existing\s+schematics$)"))) {
-            tokens.push_back("saveSchematics");
-            return tokens;
-        }
-        // "return" command
-        if (regex_match(cmd, regex(R"(return)"))) {
-            tokens.push_back("return");
-            return tokens;
-        }
-        // add resistor: "add R <Name> <node1> <node2> <value>"
-        if (regex_match(cmd, match, regex(R"(add\s+R\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("addR");
-//            cout << "recivieng resistor" << endl;
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            return tokens;
-        }
-        // add capacitor: "add C <Name> <node1> <node2> <value>"
-        if (regex_match(cmd, match, regex(R"(add\s+C\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("addC");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            return tokens;
-        }
-        // add inductor: "add L <Name> <node1> <node2> <value>"
-        if (regex_match(cmd, match, regex(R"(add\s+L\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("addL");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            return tokens;
-        }
-        // add voltage source: "add VS <Name> <node1> <node2> <value>"
-        if (regex_match(cmd, match, regex(R"(add\s+V\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("addVS");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            return tokens;
-        }
-        // add current source: "add CS <Name> <node1> <node2> <value>"
-        if (regex_match(cmd, match, regex(R"(add\s+I\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("addCS");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            tokens.push_back(match[3].str());
-            tokens.push_back(match[4].str());
-            return tokens;
-        }
-        // Voltage Source with SIN(...) syntax
-        if (regex_match(cmd, match, regex(R"(add\s+V\s+([^ ]+)\s+([^ ]+)\s+([^ ]+)\s+SIN\(\s*([^ ]+)\s+([^ ]+)\s+([^ ]+)\s*\))"))) {
-            tokens.push_back("addVS_SIN");
-            for (int i = 1; i <= 6; ++i)
-                tokens.push_back(match[i].str());
-            return tokens;
-        }
-        // accept both: "add G <node>" and "add GND <node>"
-        if (regex_match(cmd, match, regex(R"(add\s+G(?:ND)?\s+([^ ]+))"))) {
-            tokens.push_back("addGND");
-            tokens.push_back(match[1].str()); // nodeName
-            return tokens;
-        }
-
-        // delete and list commands are similar...
-        if (regex_match(cmd, match, regex(R"(delete\s+([^ ]+))"))) {
-            tokens.push_back("delete");
-            tokens.push_back(match[1].str());
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(list\s+([A-Za-z]+))"))) {
-            tokens.push_back("list");
-            tokens.push_back(match[1].str());
-            return tokens;
-        }
-        if (regex_match(cmd, regex(R"(list)"))) {
-            tokens.push_back("list");
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(rename\s+node\s+([^ ]+)\s+([^ ]+))"))) {
-            tokens.push_back("rename");
-            tokens.push_back(match[1].str());
-            tokens.push_back(match[2].str());
-            return tokens;
-        }
-        if (regex_match(cmd, regex(R"(\.nodes)"))) {
-            tokens.push_back(".nodes");
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(analyze)"))) {
-            tokens.push_back("analyze");
-            return tokens;
-        }
-        if (regex_match(cmd, match, regex(R"(\.step\s+([0-9eE\.\-]+)\s+(\d+))"))) {
-            tokens.push_back(".step");
-            tokens.push_back(match[1].str());  // dt
-            tokens.push_back(match[2].str());  // number of steps
-            return tokens;
-        }
-        if (regex_match(cmd, regex(R"(transient)"))) {
-            tokens.push_back("transient");
-            return tokens;
-        }
-        if (regex_match(cmd, regex(R"(transient_currents)"))) {
-            tokens.push_back("transient_currents");
-            return tokens;
-        }
-    }
-
-    return tokens;
-}
-
-//================ Input Handler Function ====================
-
-void chooseSchematic(const string &numStr);
-void exitSchematic(Circuit &circuit);
-void saveSchematic(Circuit &circuit);
-
-void inputHandler(const string &input, Circuit &circuit) {
-    cout << input << endl;
-    vector<string> tokens = parseCommandLine(input);
-
-    if (tokens.empty()) {
-        cout << "ERROR: Unknown or malformed command" << endl;
-        return;
-    }
-    string action = tokens[0];
-    if (action == "NewFile") {
-        string filePath = tokens[1];
-        loadNewFile(filePath);
-    }
-    else if (action == "showSchematics") {
-        showSchematicsMenu();
-    }
-    else if (action == "saveSchematics") {
-        saveSchematic(circuit);
-    }
-    else if (action == "exitSchematics") {
-        exitSchematic(circuit);
-    }
-    else if (action == "chooseSchematic") {
-        if (tokens.size() < 2) {
-            cout << "Error : Inappropriate input" << endl;
-        } else {
-            chooseSchematic(tokens[1]);
-        }
-    }
-    else if (action == "return") {
-        // Do nothing, simply return to main menu.
-    }
-    else if (action == "addR") {
-        string name = tokens[1];
-
-        bool duplicate = false;
-        for (auto elem : circuit.elements) {
-            if (elem->getName() == name) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
-            throw DuplicateNameException();
-        }
-
-        Node* n1 = circuit.getOrCreateNode(tokens[2]);
-        Node* n2 = circuit.getOrCreateNode(tokens[3]);
-        double val = parseNumber(tokens[4]);
-
-        circuit.addElement(new Resistor(name, n1, n2, val));
-    }
-    else if (action == "addC") {
-        string name = tokens[1];
-        bool duplicate = false;
-        for (auto elem : circuit.elements) {
-            if (elem->getName() == name) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
-            throw DuplicateNameException();
-        }
-        Node* n1 = circuit.getOrCreateNode(tokens[2]);
-        Node* n2 = circuit.getOrCreateNode(tokens[3]);
-        double val = parseNumber(tokens[4]);
-        circuit.addElement(new Capacitor(name, n1, n2, val));
-    }
-    else if (action == "addL") {
-        string name = tokens[1];
-        bool duplicate = false;
-        for (auto elem : circuit.elements) {
-            if (elem->getName() == name) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
-            throw DuplicateNameException();
-        }
-        Node* n1 = circuit.getOrCreateNode(tokens[2]);
-        Node* n2 = circuit.getOrCreateNode(tokens[3]);
-        double val = parseNumber(tokens[4]);
-        circuit.addElement(new Inductor(name, n1, n2, val));
-    }
-    else if (action == "addVS") {
-        string name = tokens[1];
-        bool duplicate = false;
-        for (auto elem : circuit.elements) {
-            if (elem->getName() == name) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
-            throw DuplicateNameException();
-        }
-        Node* n1 = circuit.getOrCreateNode(tokens[2]);
-        Node* n2 = circuit.getOrCreateNode(tokens[3]);
-        double val = parseNumber(tokens[4]);
-        circuit.addElement(new VoltageSource(name, n1, n2, val));
-    }
-    else if (action == "addCS") {
-        string name = tokens[1];
-        bool duplicate = false;
-        for (auto elem : circuit.elements) {
-            if (elem->getName() == name) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
-            throw DuplicateNameException();
-        }
-        Node* n1 = circuit.getOrCreateNode(tokens[2]);
-        Node* n2 = circuit.getOrCreateNode(tokens[3]);
-        double val = parseNumber(tokens[4]);
-        circuit.addElement(new CurrentSource(name, n1, n2, val));
-    }
-    else if (action == "addGND") {
-        if (tokens.size() >= 2) {
-            if (circuit.getGroundName() != "") {
-                throw DuplicateGroundNodeException();
-            }
-            circuit.setGroundNode(tokens[1]);
-        } else {
-            cout << "ERROR: Missing node name for GND command" << endl;
-        }
-    }
-    else if (action == "addVS_SIN") {
-        // قالب: add V<name> <node+> <node-> SIN(<offset> <amplitude> <frequency>)
-        string name = tokens[1];
-        bool duplicate = false;
-        for (auto elem : circuit.elements) {
-            if (elem->getName() == name) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (duplicate) {
-            throw DuplicateNameException();
-        }
-        Node* n1 = circuit.getOrCreateNode(tokens[2]);
-        Node* n2 = circuit.getOrCreateNode(tokens[3]);
-        double offset = parseNumber(tokens[4]);
-        double amp = parseNumber(tokens[5]);
-        double freq = parseNumber(tokens[6]);
-        circuit.addElement(new VoltageSource(name, n1, n2, offset, amp, freq));
-    }
-    else if (action == "transient") {
-        if (circuit.getGroundName() != "")
-            circuit.simulateTransientCapture(gWaves); // tokens[1] = ground node name
-        else
-            cout << "ERROR: Missing ground node in 'transient' command.\n";
-    }
-    else if (action == "transient_currents") {
-        if (circuit.getGroundName() != "")
-            circuit.simulateTransientCapture(gWaves);
-        else
-            cout << "ERROR: Missing ground node.\n";
-    }
-    else if (action == "delete") {
-        string name = tokens[1];
-        circuit.deleteElement(name);
-    }
-    else if (action == "list") {
-        if (tokens.size() == 2)
-            circuit.listElements(tokens[1]);
-        else
-            circuit.listElements();
-    }
-    else if (action == "rename") {
-        if (tokens.size() >= 3)
-            circuit.renameNode(tokens[1], tokens[2]);
-    }
-    else if (action == ".nodes") {
-        circuit.listNodes();
-    }
-    else if (action == "analyze") {
-        cout << circuit.groundName << endl;
-        circuit.solveNodalAnalysis();
-    }
-    else if (action == ".step") {
-        if (tokens.size() >= 3) {
-            double dt = parseNumber(tokens[1]);
-            int steps = stoi(tokens[2]);
-            circuit.setTransientParams(dt, steps);
-            cout << "Time step = " << dt << " s, total steps = " << steps << endl;
-        }
-    }
-    else {
-        cout << "ERROR: Unknown command action" << endl;
-    }
-}
-
-
-
-
-void chooseSchematic(const string &numStr) {
-    int choice = 0;
-    try {
-        choice = stoi(numStr);
-    } catch (...) {
-        cout << "Error : Inappropriate input" << endl;
-        return;
-    }
-    if(choice < 1 || choice > static_cast<int>(gSchematics.size())) {
-        cout << "Error : Inappropriate input" << endl;
-        return;
-    }
-
-    // Display the chosen schematic's content.
-    menuLevel = 2;
-    Schematic sch = gSchematics[choice - 1];
-    cout << "\nSchematic (" << sch.name << ") content:" << endl;
-    for (const auto &line : sch.lines) {
-        cout << line << endl;
-    }
-
-//    cout << sch.lines.size() << endl;
-    for (const auto &line : sch.lines) {
-        string line2 = "add " + line;
-        inputHandler(line2, circuit);
-    }
-
-    circuit.schematicPath = sch.schematichPath;
-
-}
-
-void saveSchematic(Circuit &circuit) {
-    vector<string> newLines;
-    for (auto element : circuit.elements) {
-        string newLine = "";
-        bool isSin  = false;
-        if (element->getType() == "Resistor") {
-            newLine = "R ";
-        } else if (element->getType() == "Capacitor") {
-            newLine = "C ";
-
-        } else if (element->getType() == "Inductor") {
-            newLine = "L ";
-
-        } else if (element->getType() == "VoltageSource") {
-            VoltageSource* vs = dynamic_cast<VoltageSource*>(element);
-            if (vs && vs->isSine) {
-                isSin = true;
-                ostringstream oss;
-                oss << "V " << vs->getName() << " "
-                    << vs->getNode1()->getName() << " "
-                    << vs->getNode2()->getName() << " "
-                    << "SIN(" << vs->getValue() << " " << vs->amplitude << " " << vs->frequency << ")";
-                newLines.push_back(oss.str());
-                continue;
-            } else {
-                newLine = "VS ";
-            }
-        } else if (element->getType() == "CurrentSource") {
-            newLine = "CS ";
-        }
-
-        if(!isSin) {
-            newLine = newLine + element->getName() + " " + element->getNode1()->getName() + " " + element->getNode2()->getName()
-                      + " " + to_string(element->getValue());
-        }
-
-        newLines.push_back(newLine);
-    }
-
-    if (circuit.getGroundName() != "") {
-        string newLine = "GND " + circuit.getGroundName();
-        newLines.push_back(newLine);
-    }
-
-    ofstream outFile(circuit.schematicPath);
-    if (!outFile) {
-        cerr << "Schematic has been removed or transformed." << endl;
-    } else {
-        for (const auto& item : newLines) {
-            outFile << item << endl;
-        }
-    }
-    outFile.close();
-    exitSchematic(circuit);
-
-    cout << "Enter a new file or choose an old one." << endl;
-}
-
-void exitSchematic(Circuit &circuit) {
-    circuit.reset();
-    menuLevel = 0;
-}
-
-
-//================ Process Input Loop ========================
-void processInput(Circuit &circuit) {
-    string input;
-    cout << "Enter command (or 'exit' to quit):" << endl;
-    while (getline(cin, input)) {
-        if (input == "exit")
-            break;
-        try {
-            inputHandler(input, circuit);
-        }
-        catch (const exception &e) {
-            cout << e.what() << endl;
-        }
-    }
-}
 
 
 //================ Basic Drawing Functions ====================
@@ -1781,53 +1229,112 @@ void extractConnectorsFromWires() {
     }
 }
 
-void analyzeNodeConnections() {
+std::unordered_map<int, std::string> loadedSeed;  // ✅
+
+void analyzeNodeConnections(const std::unordered_map<int,std::string>* seed = nullptr) {
+    // 0) استخراج کانکتورها از صحنه
     extractConnectorsFromPlacedElements();
     extractConnectorsFromWires();
 
-    map<int, int> parent;
-    function<int(int)> find = [&](int u) {
-        if (parent[u] != u) parent[u] = find(parent[u]);
-        return parent[u];
+    // 1) DSU (Union-Find) با path compression
+    std::map<int,int> parent;
+    auto find = [&](int u){
+        int r = u;
+        while (parent[r] != r) r = parent[r];
+        // compression
+        while (parent[u] != u) { int p = parent[u]; parent[u] = r; u = p; }
+        return r;
     };
-    auto unite = [&](int u, int v) {
-        parent[find(u)] = find(v);
+    auto unite = [&](int a, int b){
+        int ra = find(a), rb = find(b);
+        if (ra != rb) parent[ra] = rb;
     };
 
-    // initialize each connector as its own parent
-    for (const auto& c : allConnectors) {
-        parent[c.id] = c.id;
-    }
+    // 2) هر کانکتور، والد خودش
+    for (const auto& c : allConnectors) parent[c.id] = c.id;
 
-    // unite connected connectors via wires
-    for (const auto& entry : connectorGraph) {
-        int u = entry.first;
-        const vector<int>& neighbors = entry.second;
-        for (int v : neighbors) {
-            unite(u, v);
+    // 3) اگر seed داریم: کانکتورهای هم‌نام را با هم یکی کن
+    if (seed && !seed->empty()) {
+        std::unordered_map<std::string, std::vector<int>> buckets;
+        buckets.reserve(seed->size());
+        for (const auto& kv : *seed) {
+            // kv.first = connectorId, kv.second = nodeName
+            buckets[kv.second].push_back(kv.first);
+        }
+        for (auto& b : buckets) {
+            const auto& ids = b.second;
+            for (size_t i = 1; i < ids.size(); ++i) unite(ids[0], ids[i]);
         }
     }
 
-    // assign node names to connected components
-    map<int, string> rootToNodeName;
+    // 4) یگان‌سازی براساس سیم‌ها (گراف اتصالات)
+    for (const auto& entry : connectorGraph) {
+        int u = entry.first;
+        const std::vector<int>& neighbors = entry.second;
+        for (int v : neighbors) unite(u, v);
+    }
+
+    // 5) نام‌گذاری مؤلفه‌ها
+    std::map<int, std::string> rootToNodeName; // root -> name
+    std::unordered_set<std::string> usedNames; usedNames.reserve(256);
+
+    // 5.a اگر seed داریم، تا حد ممکن نام را از seed بردار
+    if (seed && !seed->empty()) {
+        // برای هر کانکتور seed، نام را روی ریشه‌اش ست کن (اگر چند نام روی یک ریشه افتاد، اولی می‌ماند)
+        for (const auto& kv : *seed) {
+            int root = find(kv.first);
+            auto it = rootToNodeName.find(root);
+            if (it == rootToNodeName.end()) {
+                rootToNodeName[root] = kv.second;
+                usedNames.insert(kv.second);
+            }
+        }
+    }
+
+    // 5.b برای مؤلفه‌های بی‌نام، نام یکتای n1,n2,… بساز (بدون تداخل با usedNames)
+    auto genName = [&](int& counter){
+        std::string s;
+        do { s = "n" + std::to_string(counter++); } while (usedNames.count(s));
+        usedNames.insert(s);
+        return s;
+    };
     int nodeCounter = 1;
+
     for (const auto& c : allConnectors) {
         int root = find(c.id);
         if (!rootToNodeName.count(root)) {
-            rootToNodeName[root] = "n" + to_string(nodeCounter++);
+            rootToNodeName[root] = genName(nodeCounter);
         }
+    }
+
+    // 6) پر کردن connectorToNode برای همهٔ کانکتورها
+    connectorToNode.clear();
+    for (const auto& c : allConnectors) {
+        int root = find(c.id);
         connectorToNode[c.id] = rootToNodeName[root];
     }
 }
+
 
 // ---------------- Canvas → Circuit ----------------
 void buildCircuit(Circuit& circuit) {
     // 0) پاک‌سازی مدار و بازسازی توپولوژی از روی بوم
     circuit.reset();
-    allConnectors.clear();
+//    allConnectors.clear();
     connectorToNode.clear();
-    connectorIdCounter = 0;        // اگر global است
-    analyzeNodeConnections();      // پرکردن allConnectors / connectorToNode
+    connectorGraph.clear();
+
+    if (loadedSeed.empty()) {
+        // حالت معمول از روی بوم
+        allConnectors.clear();
+        connectorIdCounter = 0;
+        analyzeNodeConnections(/*seed=*/nullptr);
+    } else {
+        // بلافاصله بعد از لود از فایل
+        // (allConnectors قبلاً در openAndLoadToCanvas ساخته شده!)
+        analyzeNodeConnections(&loadedSeed);
+    }
+
 
     // 1) ساخت گره‌ها (با مختصات، اگر خواستی نگه داری)
     unordered_map<string, pair<int,int>> nodePos;
@@ -2019,15 +1526,6 @@ vector<string> generateAddCommands() {
     return commands;
 }
 
-
-void saveCircuitToFile(const string& filename) {
-    analyzeNodeConnections();
-    vector<string> cmds = generateAddCommands();
-    ofstream out(filename);
-    for (const auto& line : cmds) out << line << "\n";
-    out.close();
-}
-
 bool isGroundPlaced = false;
 
 
@@ -2123,21 +1621,6 @@ void showDCOPWindow(const map<string,double>& Vmap,
 
 void runCircuit() {
     if (!isGroundPlaced) return;
-//    circuit.reset();
-//
-//    //string path = "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt";
-//    string path = "C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt";
-//    ifstream in(path);
-//    if (!in.is_open()) { cerr << "didn't found: " << path << endl; return; }
-//
-//    vector<string> lines; string line;
-//    while (getline(in, line)) { if (!line.empty()) lines.push_back(line); }
-//    in.close();
-//
-//    for (const auto& l : lines) {
-//        string line2 = "add " + l;
-//        inputHandler(line2, circuit);
-//    }
 
     buildCircuit(circuit);
 
@@ -2449,9 +1932,8 @@ void runACSweepFromCanvas(Circuit& C,
 string acStartText = "10";    // Hz
 string acStopText  = "10k";   // Hz
 string acPointsPerDecText = "10"; // points/decade
-string acProbeText = "n01"; // points/decade
+string acProbeText = ""; // points/decade
 int acFocus = -1; // 0=start, 1=stop, 2=points
-static string acProbeNodeText;
 
 
 // ===== Run dialog state =====
@@ -2597,6 +2079,285 @@ inline void drawGrid(SDL_Renderer* r, int W, int H) {
     }
 }
 
+
+
+// main headers
+
+SCircuit scircuit;
+
+string path = "";
+
+struct XYKey { int x,y; };
+struct XYHash {
+    size_t operator()(const XYKey& k) const noexcept {
+        return (uint64_t(uint32_t(k.x))<<32) ^ uint32_t(k.y);
+    }
+};
+struct XYEq {
+    bool operator()(const XYKey& a, const XYKey& b) const noexcept {
+        return a.x==b.x && a.y==b.y;
+    }
+};
+
+// گرفتن/ساختن connector id برای یک نقطه
+inline int get_or_make_connector(int x, int y,
+                                 std::unordered_map<XYKey,int,XYHash,XYEq>& xy2cid)
+{
+    XYKey key{x,y};
+    auto it = xy2cid.find(key);
+    if (it != xy2cid.end()) return it->second;
+
+    const int newId = (int)allConnectors.size() + 1; // یا از connectorIdCounter++
+    allConnectors.push_back(Connector{ newId, x, y });
+    xy2cid.emplace(key, newId);
+    return newId;
+}
+
+
+//enum ToolType { RESISTOR, CAPACITOR, INDUCTOR, VSOURCE, CSOURCE, GROUND, VSIN, WIRE };
+
+static ToolType kind_to_tool(const std::string& k){
+    if (k=="R")   return RESISTOR;
+    if (k=="C")   return CAPACITOR;
+    if (k=="L")   return INDUCTOR;
+    if (k=="V")   return VSOURCE; // VSIN را هم در value نگه داشتیم؛ اگر خواستی جداگانه VSIN بده
+    if (k=="I")   return CSOURCE;
+    if (k=="GND") return GROUND;
+    return RESISTOR;
+}
+
+
+// این تابع: فایل را باز می‌کند، SCircuit می‌خواند، و بوم را می‌سازد
+bool openAndLoadToCanvas()
+{
+    // 1) مسیر فایل
+    auto path = show_open_dialog_win("Open Circuit (.json)", "json");
+    if (path.empty()) return false;
+
+    // 2) خواندن SCircuit
+    SCircuit ckt;
+    if (!loadProject(path, ckt)) return false;
+
+    // 3) پاک کردن بوم فعلی
+    placedElements.clear();
+    wires.clear();
+    allConnectors.clear();
+    connectorToNode.clear();
+
+    // 4) map برای تبدیل node_id → name  (و برعکس اگر خواستی)
+    std::vector<std::string> nodeIdToName;
+    nodeIdToName.resize(ckt.Snodes.size());
+    for (const auto& n : ckt.Snodes) {
+        if (n.id >= 0 && (size_t)n.id < nodeIdToName.size())
+            nodeIdToName[n.id] = n.name;
+    }
+
+    // 5) نگاشت مختصات → connector id
+    std::unordered_map<XYKey,int,XYHash,XYEq> xy2cid; xy2cid.reserve(256);
+
+    // 6) بازسازی المان‌ها و کانکتورهایشان
+    const int PIN_OFFSET = ELEMENT_HALF_LEN + PIN_STUB;
+
+    for (const auto& se : ckt.Selements) {
+        // تبدیل kind → ToolType (ساده)
+        ToolType tt = kind_to_tool(se.kind);
+
+        // ساخت PlacedElement (بدون چرخش/وارونه)
+        PlacedElement pe{};
+        pe.type = tt;
+        pe.x    = se.x;
+        pe.y    = se.y;
+        pe.value= se.value;
+        pe.amp  = 0;          // اگر برای VSIN بعداً نیاز شد پر کن
+        pe.freq = 0;
+        pe.name = se.name;
+
+        // اضافه به بوم
+        placedElements.push_back(pe);
+
+        // محاسبهٔ کانکتورهای المان (افقی ثابت)
+        int id1, id2;
+        if (tt == GROUND) {
+            id1 = get_or_make_connector(se.x, se.y, xy2cid);
+            id2 = id1;
+        } else {
+            id1 = get_or_make_connector(se.x - PIN_OFFSET, se.y, xy2cid);
+            id2 = get_or_make_connector(se.x + PIN_OFFSET, se.y, xy2cid);
+        }
+
+        // نگاشت connector → node name  (برای هر پین)
+        if (se.n1 >= 0 && (size_t)se.n1 < nodeIdToName.size()) {
+            connectorToNode[id1] = nodeIdToName[se.n1];
+            loadedSeed[id1]      = nodeIdToName[se.n1];
+        }
+        if (se.n2 >= 0 && (size_t)se.n2 < nodeIdToName.size()) {
+            connectorToNode[id2] = nodeIdToName[se.n2];
+            loadedSeed[id2]      = nodeIdToName[se.n2];
+        }
+
+
+        if (tt == GROUND) {
+
+            int gnid = (se.n1 >= 0) ? se.n1 : se.n2;
+            if (gnid >= 0 && (size_t)gnid < nodeIdToName.size()) {
+                const std::string& gname = nodeIdToName[gnid];
+
+                // کانکتور نماد زمین را حتماً به همون نود مپ کن
+                connectorToNode[id1] = gname;
+
+                // فلگ UI تا اجرای Run بدون خطا
+                isGroundPlaced = true;
+
+                if (circuit.getGroundName().empty()) circuit.setGroundNode(gname);
+            }
+        }
+    }
+
+    // 7) بازسازی سیم‌ها (Polyline → سگمنت‌های متوالی)
+    int nextWireId = 1;
+    for (const auto& sw : ckt.Swires) {
+        if (sw.points.size() < 2) continue;
+        for (size_t i = 1; i < sw.points.size(); ++i) {
+            const auto& a = sw.points[i-1];
+            const auto& b = sw.points[i];
+            // حذف صفرطول
+            if (a.x==b.x && a.y==b.y) continue;
+
+            // تبدیل به WireSeg برنامه‌ی تو
+            SDL_Point p1{ a.x, a.y };
+            SDL_Point p2{ b.x, b.y };
+            wires.push_back({ p1, p2 });
+
+
+            // کانکتورهای متناظر هر سر
+            int c1 = get_or_make_connector(a.x, a.y, xy2cid);
+            int c2 = get_or_make_connector(b.x, b.y, xy2cid);
+
+            // اگر برای سر سیم‌ها node داریم، می‌تونی اینجا connectorToNode رو هم پر کنی؛
+            // اما چون node سیم از روی اتصال با المان‌ها/برچسب‌ها مشخص میشه، معمولا همین کافیست.
+            (void)c1; (void)c2;
+            ++nextWireId;
+        }
+    }
+
+    // 8) GND به‌عنوان عنصر: اگر می‌خواهی همان‌جا ground را ست کنی
+    // هنگام تحلیل بعدی، اگر kind=="GND"، آن نود را زمین در نظر بگیر.
+
+    // 9) موفق
+    return true;
+}
+
+
+
+
+
+
+
+
+bool saveFromCanvasLikeBuildCircuit(const std::string& folderPath)
+{
+    // 0) بازسازی توپولوژی (عین buildCircuit)
+    allConnectors.clear();
+    connectorToNode.clear();
+    analyzeNodeConnections();
+
+    // 1) مختصات نماینده برای هر نود منطقی
+    std::unordered_map<std::string, std::pair<int,int>> nodePos;
+    nodePos.reserve(allConnectors.size());
+    for (const auto& c : allConnectors) {
+        auto it = connectorToNode.find(c.id);
+        if (it == connectorToNode.end()) continue;
+        const std::string& nn = it->second;
+        if (!nodePos.count(nn)) nodePos[nn] = {c.x, c.y};
+    }
+
+    // 2) ساخت SCircuit و Snodes
+    SCircuit c;
+    c.Snodes.reserve(nodePos.size());
+    std::unordered_map<std::string,int> nodeId; nodeId.reserve(nodePos.size());
+    int nextId = 0;
+    for (auto& kv : nodePos) {
+        const std::string& name = kv.first;
+        auto xy = kv.second;
+        nodeId[name] = nextId;
+        c.Snodes.push_back(SNode{ nextId, name, xy.first, xy.second });
+        ++nextId;
+    }
+
+    // 3) نام‌گذاری خودکار مثل buildCircuit
+    const int PIN_OFFSET = ELEMENT_HALF_LEN + PIN_STUB;
+    std::map<ToolType,int> typeCounter;
+    auto autoName = [&](const PlacedElement& e)->std::string{
+        static std::map<ToolType,char> L = {
+                {RESISTOR,'R'},{CAPACITOR,'C'},{INDUCTOR,'L'},
+                {VSOURCE,'V'},{CSOURCE,'I'},{GROUND,'G'},{VSIN,'V'}
+        };
+        if (!e.name.empty()) return e.name;
+        return std::string(1, L[e.type]) + std::to_string(++typeCounter[e.type]);
+    };
+
+    // 4) تبدیل placedElements → Selements (بدون rot/mir)
+    c.Selements.reserve(placedElements.size());
+    for (const auto& e : placedElements) {
+        if (e.type == WIRE) continue;
+
+        int id1, id2;
+        const int y = e.y;
+        if (e.type == GROUND) {
+            id1 = addConnector(e.x, y);
+            id2 = id1;
+        } else {
+            id1 = addConnector(e.x - PIN_OFFSET, y);
+            id2 = addConnector(e.x + PIN_OFFSET, y);
+        }
+
+        auto it1 = connectorToNode.find(id1);
+        auto it2 = connectorToNode.find(id2);
+        if (it1 == connectorToNode.end() || it2 == connectorToNode.end()) continue;
+
+        const std::string node1 = it1->second;
+        const std::string node2 = it2->second;
+
+        int n1 = -1, n2 = -1;
+        auto f1 = nodeId.find(node1); if (f1 != nodeId.end()) n1 = f1->second;
+        auto f2 = nodeId.find(node2); if (f2 != nodeId.end()) n2 = f2->second;
+
+        std::string name = autoName(e);
+
+        std::string kind;
+        switch (e.type) {
+            case RESISTOR: kind = "R"; break;
+            case CAPACITOR: kind = "C"; break;
+            case INDUCTOR: kind = "L"; break;
+            case VSOURCE:  kind = "V"; break;   // DC
+            case VSIN:     kind = "V"; break;   // AC (فعلاً فقط value=offset)
+            case CSOURCE:  kind = "I"; break;
+            case GROUND:   kind = "GND"; break;
+            default: continue;
+        }
+
+        // چرخش/آینه نداریم: rotation=0.0, mirror=false
+        c.Selements.push_back(SElement{
+                kind, name,
+                n1, n2,
+                e.value,
+                e.x, e.y,
+                0.0, false
+        });
+    }
+
+    // 5) ذخیره سیم‌ها به‌صورت گرافیکی (Polyline دو نقطه‌ای)
+    c.Swires.reserve(wires.size());
+    for (const auto& w : wires) {
+        SWire sw; sw.id = static_cast<int>(c.Swires.size()) + 1;
+        sw.points.push_back(Point{ w.first.x,  w.first.y  });
+        sw.points.push_back(Point{ w.second.x, w.second.y });
+        c.Swires.push_back(std::move(sw));
+    }
+
+    // 6) ذخیره روی دیسک
+    return saveProject(folderPath, c);
+}
 
 
 //================ Main Function =============================
@@ -2790,7 +2551,6 @@ int main(int argc, char* argv[]) {
                             double fStart = parseNumber(acStartText);
                             double fStop  = parseNumber(acStopText);
                             int    pDec   = max(1, atoi(acPointsPerDecText.c_str()));
-                            string probeName = acProbeNodeText;
                             // قبلی:
                             // runACSweepStub(circuit, fStart, fStop, pDec);
 
@@ -2884,18 +2644,38 @@ int main(int argc, char* argv[]) {
                     continue;
                 }
 
+
                 if (hoveringDropdown && showFileMenu) {
                     int option = (my - 30) / 20;
                     switch (option) {
                         case 0:
-                            // TODO: Implement New File
+                            placedElements.clear();
+                            wires.clear();
+                            allConnectors.clear();
+                            connectorToNode.clear();
+
+                            circuit.reset();
+                            connectorIdCounter = 0;
+
+                            path = "";
                             break;
                         case 1:
-                            // TODO: Implement Open File
+                            openAndLoadToCanvas();
                             break;
                         case 2:
-                            saveCircuitToFile("C:\\\\Users\\\\Ared\\\\Desktop\\\\Circuits\\\\circuit1.txt");
-//                            saveCircuitToFile("C:\\\\Users\\\\Informatic Iran\\\\Desktop\\\\circ\\\\salam.txt");
+                            if (path == "") {
+                                path = show_save_dialog_win("Save Circuit", "circuit.json", "json");
+
+                                if (path.empty()) {
+                                    // کاربر لغو کرد
+                                    continue;
+                                }
+
+                                saveFromCanvasLikeBuildCircuit(path);
+                            } else {
+                                saveFromCanvasLikeBuildCircuit(path);
+                            }
+
                             break;
                     }
                     fileClicked = false;
@@ -3429,10 +3209,10 @@ int main(int argc, char* argv[]) {
                 drawBox(acStopBox,  acStopText,  (acFocus==1), "e.g. 10k");
 
                 drawText("Pts/dec",    acPtsBox.x,   acPtsBox.y   - 18);
-                drawBox(acPtsBox,   acPointsPerDecText, (acFocus==2), "10");
+                drawBox(acPtsBox,   acPointsPerDecText, (acFocus==2), "e.g. 10");
 
                 drawText("Probe Node:",    acProbeBox.x,   acProbeBox.y   - 18);
-                drawBox(acProbeBox,   acProbeText, (acFocus==3), "n01");
+                drawBox(acProbeBox,   acProbeText, (acFocus==3), "e.g. n01");
             }
 
             // Buttons
